@@ -109,16 +109,18 @@ Authenticated:
 
 | Method | Path | Query | Description |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/messages` | `q`, `limit`, `since`, `until` | Returns latest-first messages from local storage. |
+| `GET` | `/api/v1/messages` | `q`, `host`, `limit`, `offset`, `since`, `until` | Returns latest-first messages from local storage. |
 | `POST` | `/api/v1/test-event` | none | Sends one server-side RFC5424 test event to the configured syslog destination. |
 
-`since` and `until` use RFC3339 timestamps and filter on `received_at`. `limit`
-defaults to `200` and is capped at `2000`.
+`host` is an exact syslog hostname filter and can be repeated for multiple
+hosts. `since` and `until` use RFC3339 timestamps and filter on `received_at`.
+`limit` defaults to `200` and is capped at `2000`. `offset` defaults to `0` and
+is used for paging.
 
 Example:
 
 ```powershell
-curl.exe -u admin:secret "http://localhost:8080/api/v1/messages?limit=50&q=error"
+curl.exe -u admin:secret "http://localhost:8080/api/v1/messages?limit=50&offset=0&host=edge-1&q=error"
 ```
 
 The response shape is:
@@ -145,7 +147,9 @@ The response shape is:
   ],
   "meta": {
     "count": 1,
-    "limit": 50
+    "limit": 50,
+    "offset": 0,
+    "has_more": false
   }
 }
 ```
@@ -153,8 +157,10 @@ The response shape is:
 ## Frontend Workflow
 
 The UI is the first screen at `/`. It shows the message timeline in a wide,
-scrollable table with syslog fields as columns. The filter box maps to the
-`q` query parameter and live refresh polls the API every two seconds. The
+scrollable table with syslog fields as columns. The host selector maps to
+repeated `host` query parameters, the filter box maps to `q`, and the page
+controls map to `offset`. Live refresh polls the current page every two
+seconds. The export button downloads the currently visible rows as NDJSON. The
 `Send test event` button calls `/api/v1/test-event`, which asks the server to
 send one syslog message to `LOGTHING_TEST_EVENT_TARGET`.
 

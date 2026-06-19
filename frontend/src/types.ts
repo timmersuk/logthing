@@ -22,5 +22,7 @@ export interface MessagesResponse {
   meta: {
     count: number;
     limit: number;
+    offset: number;
+    has_more: boolean;
   };
 }

@@ -119,3 +119,61 @@ func TestFileStoreQueryFiltersText(t *testing.T) {
 		t.Fatalf("Query(Text) = %#v, want only message two", got)
 	}
 }
+
+func TestFileStoreQueryFiltersHostsAndText(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	receivedAt := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	for _, msg := range []model.Message{
+		{ID: "one", ReceivedAt: receivedAt, Hostname: "edge-a", Message: "dropped packet"},
+		{ID: "two", ReceivedAt: receivedAt.Add(time.Second), Hostname: "edge-b", Message: "dropped packet"},
+		{ID: "three", ReceivedAt: receivedAt.Add(2 * time.Second), Hostname: "edge-c", Message: "accepted login"},
+	} {
+		if err := store.Append(context.Background(), msg); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+
+	got, err := store.Query(context.Background(), Query{
+		Text:  "drop",
+		Hosts: []string{"edge-a", "edge-c"},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+
+	if len(got) != 1 || got[0].ID != "one" {
+		t.Fatalf("Query(Hosts, Text) = %#v, want only message one", got)
+	}
+}
+
+func TestFileStoreQueryAppliesOffsetAfterSorting(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	receivedAt := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	for _, msg := range []model.Message{
+		{ID: "old", ReceivedAt: receivedAt, Hostname: "edge-a"},
+		{ID: "middle", ReceivedAt: receivedAt.Add(time.Second), Hostname: "edge-b"},
+		{ID: "new", ReceivedAt: receivedAt.Add(2 * time.Second), Hostname: "edge-c"},
+	} {
+		if err := store.Append(context.Background(), msg); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+
+	got, err := store.Query(context.Background(), Query{Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+
+	if len(got) != 1 || got[0].ID != "middle" {
+		t.Fatalf("Query(Offset) = %#v, want only message middle", got)
+	}
+}

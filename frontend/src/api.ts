@@ -2,7 +2,9 @@ import type { MessagesResponse } from "./types";
 
 interface ListMessagesParams {
   query: string;
+  hosts: string[];
   limit: number;
+  offset: number;
 }
 
 export async function listMessages(
@@ -11,6 +13,13 @@ export async function listMessages(
 ): Promise<MessagesResponse> {
   const query = new URLSearchParams();
   query.set("limit", String(params.limit));
+  query.set("offset", String(params.offset));
+  for (const host of params.hosts) {
+    const trimmed = host.trim();
+    if (trimmed !== "") {
+      query.append("host", trimmed);
+    }
+  }
   if (params.query.trim() !== "") {
     query.set("q", params.query.trim());
   }

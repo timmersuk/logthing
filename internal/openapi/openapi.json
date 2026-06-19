@@ -51,7 +51,7 @@
       "get": {
         "tags": ["messages"],
         "summary": "List syslog messages",
-        "description": "Returns syslog messages from local storage in latest-first order. Results can be filtered by free text and received-at time window.",
+        "description": "Returns syslog messages from local storage in latest-first order. Results can be filtered by host, free text, and received-at time window, then paged with limit and offset.",
         "operationId": "listMessages",
         "security": [
           {
@@ -69,6 +69,20 @@
             }
           },
           {
+            "name": "host",
+            "in": "query",
+            "required": false,
+            "description": "Exact syslog hostname filter. Repeat this parameter to include multiple hosts.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -78,6 +92,17 @@
               "minimum": 1,
               "maximum": 2000,
               "default": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Zero-based result offset for paging through the latest-first result set.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
             }
           },
           {
@@ -267,7 +292,7 @@
       },
       "MessagesMeta": {
         "type": "object",
-        "required": ["count", "limit"],
+        "required": ["count", "limit", "offset", "has_more"],
         "properties": {
           "count": {
             "type": "integer",
@@ -276,6 +301,14 @@
           "limit": {
             "type": "integer",
             "example": 50
+          },
+          "offset": {
+            "type": "integer",
+            "example": 0
+          },
+          "has_more": {
+            "type": "boolean",
+            "example": true
           }
         }
       },

@@ -104,12 +104,94 @@ p {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto auto auto;
+  grid-template-columns: minmax(12rem, 16rem) minmax(220px, 1fr) repeat(6, auto);
   align-items: center;
   gap: 0.75rem;
   padding: 0.85rem 1.25rem;
   border-bottom: 1px solid #dfe6dc;
   background: #ffffff;
+}
+
+.host-filter {
+  position: relative;
+  min-width: 0;
+}
+
+.host-filter-button {
+  width: 100%;
+  height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid #cdd8d1;
+  border-radius: 8px;
+  color: #26342c;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.host-filter-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-filter-button:hover {
+  border-color: #0d9488;
+  color: #042f2e;
+  background: #f0fdfa;
+}
+
+.host-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 5;
+  width: min(22rem, 88vw);
+  max-height: 18rem;
+  padding: 0.35rem;
+  border: 1px solid #cdd8d1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 38px rgba(23, 32, 27, 0.16);
+  overflow: auto;
+}
+
+.host-option {
+  min-height: 2.1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.45rem;
+  border-radius: 6px;
+  color: #26342c;
+  font-size: 0.86rem;
+}
+
+.host-option:hover {
+  background: #f5f7f3;
+}
+
+.host-option input {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.host-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-empty {
+  padding: 0.55rem 0.45rem;
+  color: #647067;
+  font-size: 0.84rem;
 }
 
 .filter-box {
@@ -203,6 +285,19 @@ p {
   background: #f0fdfa;
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  color: #96a39b;
+  background: #f7f8f6;
+  border-color: #dce4da;
+}
+
+.icon-button:disabled:hover {
+  color: #96a39b;
+  background: #f7f8f6;
+  border-color: #dce4da;
+}
+
 .command-button {
   height: 2.5rem;
   display: inline-flex;
@@ -222,9 +317,41 @@ p {
   background: #99f6e4;
 }
 
+.secondary-command {
+  border-color: #cdd8d1;
+  color: #26342c;
+  background: #ffffff;
+}
+
+.secondary-command:hover {
+  border-color: #0d9488;
+  color: #042f2e;
+  background: #f0fdfa;
+}
+
 .command-button:disabled {
-  cursor: progress;
+  cursor: not-allowed;
   opacity: 0.7;
+}
+
+.pager {
+  height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #3d4a42;
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
+.pager .icon-button {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.pager span {
+  min-width: 3.7rem;
+  text-align: center;
 }
 
 .error-banner {
@@ -331,8 +458,14 @@ tbody tr:hover td {
     grid-template-columns: 1fr auto auto;
   }
 
+  .host-filter,
   .filter-box {
     grid-column: 1 / -1;
+  }
+
+  .pager {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .table-shell {

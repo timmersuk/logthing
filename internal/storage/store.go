@@ -8,10 +8,12 @@ import (
 )
 
 type Query struct {
-	Text  string
-	Limit int
-	Since *time.Time
-	Until *time.Time
+	Text   string
+	Hosts  []string
+	Limit  int
+	Offset int
+	Since  *time.Time
+	Until  *time.Time
 }
 
 type Store interface {

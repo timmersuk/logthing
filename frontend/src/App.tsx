@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Database, Pause, Play, RefreshCcw, Search, Send, Shield, Wifi } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Database,
+  Download,
+  Pause,
+  Play,
+  RefreshCcw,
+  Search,
+  Send,
+  Server,
+  Shield,
+  Wifi
+} from "lucide-react";
 import { listMessages, sendTestEvent } from "./api";
 import type { SyslogMessage } from "./types";
 
@@ -27,10 +41,35 @@ function numberText(value?: number): string {
   return value === undefined || value === null ? "" : String(value);
 }
 
+function filenameTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function hostLabel(hosts: string[]): string {
+  if (hosts.length === 0) {
+    return "All hosts";
+  }
+  if (hosts.length === 1) {
+    return hosts[0];
+  }
+  return `${hosts.length} hosts`;
+}
+
+function sortedUniqueHosts(hosts: string[]): string[] {
+  return Array.from(new Set(hosts.map((host) => host.trim()).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b)
+  );
+}
+
 export default function App() {
   const [messages, setMessages] = useState<SyslogMessage[]>([]);
   const [filterInput, setFilterInput] = useState("");
   const [filter, setFilter] = useState("");
+  const [selectedHosts, setSelectedHosts] = useState<string[]>([]);
+  const [knownHosts, setKnownHosts] = useState<string[]>([]);
+  const [hostMenuOpen, setHostMenuOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
@@ -38,17 +77,38 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
-    const handle = window.setTimeout(() => setFilter(filterInput), 250);
+    const handle = window.setTimeout(() => {
+      setFilter(filterInput);
+      setPage(0);
+    }, 250);
     return () => window.clearTimeout(handle);
   }, [filterInput]);
+
+  const offset = page * messageLimit;
+
+  const hostOptions = useMemo(
+    () => sortedUniqueHosts([...knownHosts, ...selectedHosts]),
+    [knownHosts, selectedHosts]
+  );
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
       setLoading(true);
       setError(null);
       try {
-        const response = await listMessages({ query: filter, limit: messageLimit }, signal);
+        const response = await listMessages(
+          { query: filter, hosts: selectedHosts, limit: messageLimit, offset },
+          signal
+        );
         setMessages(response.data);
+        setHasMore(response.meta.has_more);
+        setKnownHosts((current) =>
+          sortedUniqueHosts([
+            ...current,
+            ...selectedHosts,
+            ...response.data.map((message) => message.hostname ?? "")
+          ])
+        );
         setLastUpdated(new Date());
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
@@ -59,7 +119,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [filter]
+    [filter, offset, selectedHosts]
   );
 
   useEffect(() => {
@@ -100,6 +160,35 @@ export default function App() {
     }
   }, [refresh]);
 
+  const clearHosts = useCallback(() => {
+    setPage(0);
+    setSelectedHosts([]);
+  }, []);
+
+  const toggleHost = useCallback((host: string) => {
+    setPage(0);
+    setSelectedHosts((current) => {
+      if (current.includes(host)) {
+        return current.filter((value) => value !== host);
+      }
+      return sortedUniqueHosts([...current, host]);
+    });
+  }, []);
+
+  const handleExport = useCallback(() => {
+    if (messages.length === 0) {
+      return;
+    }
+    const body = `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`;
+    const blob = new Blob([body], { type: "application/x-ndjson;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `logthing-visible-${filenameTimestamp(new Date())}.ndjson`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }, [messages]);
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -128,6 +217,45 @@ export default function App() {
       </header>
 
       <section className="toolbar" aria-label="Timeline controls">
+        <div className="host-filter">
+          <button
+            type="button"
+            className="host-filter-button"
+            onClick={() => setHostMenuOpen((value) => !value)}
+            aria-expanded={hostMenuOpen}
+          >
+            <Server size={17} />
+            <span>{hostLabel(selectedHosts)}</span>
+            <ChevronDown size={16} aria-hidden="true" />
+          </button>
+
+          {hostMenuOpen && (
+            <div className="host-menu">
+              <label className="host-option">
+                <input
+                  type="checkbox"
+                  checked={selectedHosts.length === 0}
+                  onChange={clearHosts}
+                />
+                <span>All hosts</span>
+              </label>
+
+              {hostOptions.map((host) => (
+                <label className="host-option" key={host}>
+                  <input
+                    type="checkbox"
+                    checked={selectedHosts.includes(host)}
+                    onChange={() => toggleHost(host)}
+                  />
+                  <span>{host}</span>
+                </label>
+              ))}
+
+              {hostOptions.length === 0 && <div className="host-empty">No hosts</div>}
+            </div>
+          )}
+        </div>
+
         <label className="filter-box">
           <Search size={18} />
           <input
@@ -159,6 +287,40 @@ export default function App() {
           <Send size={17} className={sendingTest ? "spin" : ""} />
           <span>Send test event</span>
         </button>
+
+        <button
+          type="button"
+          className="command-button secondary-command"
+          onClick={handleExport}
+          disabled={messages.length === 0}
+        >
+          <Download size={17} />
+          <span>Export NDJSON</span>
+        </button>
+
+        <div className="pager" aria-label="Message pages">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setPage((value) => Math.max(0, value - 1))}
+            disabled={page === 0}
+            title="Previous page"
+            aria-label="Previous page"
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <span>Page {page + 1}</span>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setPage((value) => value + 1)}
+            disabled={!hasMore}
+            title="Next page"
+            aria-label="Next page"
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
 
         <button
           type="button"

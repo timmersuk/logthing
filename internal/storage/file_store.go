@@ -90,6 +90,7 @@ func (s *FileStore) Query(ctx context.Context, query Query) ([]model.Message, er
 	}
 
 	text := strings.ToLower(strings.TrimSpace(query.Text))
+	hosts := selectedHosts(query.Hosts)
 	messages := make([]model.Message, 0, limit)
 
 	for _, file := range files {
@@ -105,6 +106,9 @@ func (s *FileStore) Query(ctx context.Context, query Query) ([]model.Message, er
 			if !withinWindow(msg, query.Since, query.Until) {
 				continue
 			}
+			if len(hosts) > 0 && !matchesHost(msg, hosts) {
+				continue
+			}
 			if text != "" && !matchesText(msg, text) {
 				continue
 			}
@@ -115,6 +119,12 @@ func (s *FileStore) Query(ctx context.Context, query Query) ([]model.Message, er
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].ReceivedAt.After(messages[j].ReceivedAt)
 	})
+	if query.Offset > 0 {
+		if query.Offset >= len(messages) {
+			return []model.Message{}, nil
+		}
+		messages = messages[query.Offset:]
+	}
 	if len(messages) > limit {
 		messages = messages[:limit]
 	}
@@ -184,6 +194,23 @@ func withinWindow(msg model.Message, since, until *time.Time) bool {
 		return false
 	}
 	return true
+}
+
+func selectedHosts(values []string) map[string]struct{} {
+	hosts := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		host := strings.TrimSpace(value)
+		if host == "" {
+			continue
+		}
+		hosts[host] = struct{}{}
+	}
+	return hosts
+}
+
+func matchesHost(msg model.Message, hosts map[string]struct{}) bool {
+	_, ok := hosts[msg.Hostname]
+	return ok
 }
 
 func matchesText(msg model.Message, needle string) bool {

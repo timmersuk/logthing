@@ -61,8 +61,10 @@ type messagesResponse struct {
 }
 
 type messagesMeta struct {
-	Count int `json:"count"`
-	Limit int `json:"limit"`
+	Count   int  `json:"count"`
+	Limit   int  `json:"limit"`
+	Offset  int  `json:"offset"`
+	HasMore bool `json:"has_more"`
 }
 
 type healthcheckResponse struct {
@@ -145,17 +147,25 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := s.store.Query(r.Context(), query)
+	storeQuery := query
+	storeQuery.Limit = query.Limit + 1
+	messages, err := s.store.Query(r.Context(), storeQuery)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "query messages"})
 		return
+	}
+	hasMore := len(messages) > query.Limit
+	if hasMore {
+		messages = messages[:query.Limit]
 	}
 
 	writeJSON(w, http.StatusOK, messagesResponse{
 		Data: messages,
 		Meta: messagesMeta{
-			Count: len(messages),
-			Limit: query.Limit,
+			Count:   len(messages),
+			Limit:   query.Limit,
+			Offset:  query.Offset,
+			HasMore: hasMore,
 		},
 	})
 }
@@ -298,6 +308,18 @@ func parseMessagesQuery(r *http.Request) (storage.Query, error) {
 		limit = parsed
 	}
 
+	offset := 0
+	if rawOffset := strings.TrimSpace(values.Get("offset")); rawOffset != "" {
+		parsed, err := strconv.Atoi(rawOffset)
+		if err != nil {
+			return storage.Query{}, fmt.Errorf("invalid offset %q", rawOffset)
+		}
+		if parsed < 0 {
+			return storage.Query{}, errors.New("offset must be greater than or equal to 0")
+		}
+		offset = parsed
+	}
+
 	since, err := parseOptionalTime(values.Get("since"))
 	if err != nil {
 		return storage.Query{}, fmt.Errorf("invalid since: %w", err)
@@ -308,11 +330,30 @@ func parseMessagesQuery(r *http.Request) (storage.Query, error) {
 	}
 
 	return storage.Query{
-		Text:  values.Get("q"),
-		Limit: limit,
-		Since: since,
-		Until: until,
+		Text:   values.Get("q"),
+		Hosts:  cleanQueryValues(values["host"]),
+		Limit:  limit,
+		Offset: offset,
+		Since:  since,
+		Until:  until,
 	}, nil
+}
+
+func cleanQueryValues(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+	return cleaned
 }
 
 func parseOptionalTime(value string) (*time.Time, error) {
