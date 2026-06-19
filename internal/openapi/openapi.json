@@ -177,6 +177,59 @@
         }
       }
     },
+    "/api/v1/messages/stream": {
+      "get": {
+        "tags": ["messages"],
+        "summary": "Stream new syslog messages",
+        "description": "Opens a Server-Sent Events stream for newly appended messages. The stream emits message events whose data field is a Message JSON object. It does not replay stored history; use GET /api/v1/messages for paged history and search.",
+        "operationId": "streamMessages",
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream of new messages",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "example": "event: message\ndata: {\"id\":\"f2e4a19c6f50429bbf7afc1fcb705fa6\",\"received_at\":\"2026-06-19T12:00:00Z\",\"hostname\":\"edge-1\",\"message\":\"link changed\"}\n\n"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Basic Auth credentials",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Message stream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/messages/import": {
       "post": {
         "tags": ["messages"],

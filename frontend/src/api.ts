@@ -39,6 +39,10 @@ export async function listMessages(
   return response.json() as Promise<MessagesResponse>;
 }
 
+export function openMessageStream(): EventSource {
+  return new EventSource("/api/v1/messages/stream");
+}
+
 export async function sendTestEvent(signal?: AbortSignal): Promise<void> {
   const response = await fetch("/api/v1/test-event", {
     method: "POST",

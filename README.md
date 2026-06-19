@@ -110,6 +110,7 @@ Authenticated:
 | Method | Path | Query | Description |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/messages` | `q`, `host`, `limit`, `offset`, `since`, `until` | Returns latest-first messages from local storage. |
+| `GET` | `/api/v1/messages/stream` | none | Streams newly appended messages as Server-Sent Events. |
 | `POST` | `/api/v1/messages/import` | none | Imports newline-delimited JSON messages into local storage. |
 | `POST` | `/api/v1/test-event` | none | Sends one server-side RFC5424 test event to the configured syslog destination. |
 
@@ -122,6 +123,12 @@ Example:
 
 ```powershell
 curl.exe -u admin:secret "http://localhost:8080/api/v1/messages?limit=50&offset=0&host=edge-1&q=error"
+```
+
+Stream new messages with SSE:
+
+```powershell
+curl.exe -N -u admin:secret "http://localhost:8080/api/v1/messages/stream"
 ```
 
 The response shape is:
@@ -177,11 +184,13 @@ curl.exe -u admin:secret `
 The UI is the first screen at `/`. It shows the message timeline in a wide,
 scrollable table with syslog fields as columns. The host selector maps to
 repeated `host` query parameters, the filter box maps to `q`, and the page
-controls map to `offset`. Live refresh polls the current page every two
-seconds. The import button uploads NDJSON to `/api/v1/messages/import`, and the
-export button downloads the currently visible rows as NDJSON. The `Send test
-event` button calls `/api/v1/test-event`, which asks the server to send one
-syslog message to `LOGTHING_TEST_EVENT_TARGET`.
+controls map to `offset`. Live updates are available only on page 1 and use
+`/api/v1/messages/stream` so newly received messages are pushed into the visible
+window. If the SSE connection fails, live updates are disabled and the UI shows
+a notification. The import button uploads NDJSON to
+`/api/v1/messages/import`, and the export button downloads the currently visible
+rows as NDJSON. The `Send test event` button calls `/api/v1/test-event`, which
+asks the server to send one syslog message to `LOGTHING_TEST_EVENT_TARGET`.
 
 Browsers cannot send raw UDP or TCP syslog packets directly through normal web
 APIs, so the button uses a server-side sender. The CLI sender above is the

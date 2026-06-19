@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"path"
 	"strconv"
@@ -25,6 +26,7 @@ const (
 
 type Config struct {
 	Store       storage.Store
+	Events      MessageSubscriber
 	Frontend    fs.FS
 	SwaggerUI   fs.FS
 	OpenAPISpec []byte
@@ -35,6 +37,10 @@ type Config struct {
 
 type TestEventSender func(context.Context, string) (TestEventResult, error)
 
+type MessageSubscriber interface {
+	Subscribe() (<-chan model.Message, func())
+}
+
 type TestEventResult struct {
 	Network string `json:"network"`
 	Address string `json:"address"`
@@ -43,6 +49,7 @@ type TestEventResult struct {
 
 type server struct {
 	store       storage.Store
+	events      MessageSubscriber
 	frontend    fs.FS
 	swaggerUI   fs.FS
 	openAPISpec []byte
@@ -110,6 +117,7 @@ func NewRouter(cfg Config) (http.Handler, error) {
 
 	srv := &server{
 		store:       cfg.Store,
+		events:      cfg.Events,
 		frontend:    cfg.Frontend,
 		swaggerUI:   cfg.SwaggerUI,
 		openAPISpec: cfg.OpenAPISpec,
@@ -121,6 +129,7 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/v1/messages", srv.withMethod(http.MethodGet, srv.handleMessages))
 	apiMux.HandleFunc("/api/v1/messages/import", srv.withMethod(http.MethodPost, srv.handleImportMessages))
+	apiMux.HandleFunc("/api/v1/messages/stream", srv.withMethod(http.MethodGet, srv.handleMessageStream))
 	apiMux.HandleFunc("/api/v1/test-event", srv.withMethod(http.MethodPost, srv.handleTestEvent))
 
 	mux := http.NewServeMux()
@@ -144,6 +153,7 @@ func (s *server) handleHealthcheck(w http.ResponseWriter, _ *http.Request) {
 func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	query, err := parseMessagesQuery(r)
 	if err != nil {
+		logRequestFailure(r, http.StatusBadRequest, "parse messages query: %v", err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
 	}
@@ -152,6 +162,7 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	storeQuery.Limit = query.Limit + 1
 	messages, err := s.store.Query(r.Context(), storeQuery)
 	if err != nil {
+		logRequestFailure(r, http.StatusInternalServerError, "query messages: %v", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "query messages"})
 		return
 	}
@@ -175,9 +186,11 @@ func (s *server) handleImportMessages(w http.ResponseWriter, r *http.Request) {
 	result, err := importMessages(r.Context(), s.store, r.Body)
 	if err != nil {
 		if isImportValidationError(err) {
+			logRequestFailure(r, http.StatusBadRequest, "validate import: %v", err)
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 			return
 		}
+		logRequestFailure(r, http.StatusInternalServerError, "import messages: %v", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "import messages"})
 		return
 	}
@@ -189,8 +202,64 @@ func (s *server) handleImportMessages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) handleMessageStream(w http.ResponseWriter, r *http.Request) {
+	if s.events == nil {
+		logRequestFailure(r, http.StatusServiceUnavailable, "message stream is not configured")
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "message stream is not configured"})
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		logRequestFailure(r, http.StatusInternalServerError, "message stream flushing is not supported")
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "message stream is not supported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	messages, unsubscribe := s.events.Subscribe()
+	defer unsubscribe()
+
+	if _, err := io.WriteString(w, ": connected\n\n"); err != nil {
+		logRequestFailure(r, http.StatusInternalServerError, "write message stream greeting: %v", err)
+		return
+	}
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg, ok := <-messages:
+			if !ok {
+				return
+			}
+			if err := writeMessageEvent(w, msg); err != nil {
+				logRequestFailure(r, http.StatusInternalServerError, "write message stream event: %v", err)
+				return
+			}
+			flusher.Flush()
+		case <-heartbeat.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				logRequestFailure(r, http.StatusInternalServerError, "write message stream heartbeat: %v", err)
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *server) handleTestEvent(w http.ResponseWriter, r *http.Request) {
 	if s.testEvent == nil {
+		logRequestFailure(r, http.StatusServiceUnavailable, "test event sender is not configured")
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "test event sender is not configured"})
 		return
 	}
@@ -199,6 +268,7 @@ func (s *server) handleTestEvent(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil && r.ContentLength != 0 {
 		err := json.NewDecoder(r.Body).Decode(&req)
 		if err != nil && !errors.Is(err, io.EOF) {
+			logRequestFailure(r, http.StatusBadRequest, "decode test event request: %v", err)
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid test event request"})
 			return
 		}
@@ -207,6 +277,7 @@ func (s *server) handleTestEvent(w http.ResponseWriter, r *http.Request) {
 	message := strings.TrimSpace(req.Message)
 	result, err := s.testEvent(r.Context(), message)
 	if err != nil {
+		logRequestFailure(r, http.StatusBadGateway, "send test event: %v", err)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
 		return
 	}
@@ -233,6 +304,7 @@ func (s *server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) handleSwaggerUIRedirect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		logRequestFailure(r, http.StatusMethodNotAllowed, "method not allowed")
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodHead}, ", "))
 		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
@@ -242,6 +314,7 @@ func (s *server) handleSwaggerUIRedirect(w http.ResponseWriter, r *http.Request)
 
 func (s *server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		logRequestFailure(r, http.StatusMethodNotAllowed, "method not allowed")
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodHead}, ", "))
 		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
@@ -258,6 +331,7 @@ func (s *server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleFrontend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		logRequestFailure(r, http.StatusMethodNotAllowed, "method not allowed")
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodHead}, ", "))
 		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
@@ -290,6 +364,7 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, files fs.FS, name s
 
 	data, err := io.ReadAll(file)
 	if err != nil {
+		logRequestFailure(r, http.StatusInternalServerError, "read static asset %q: %v", name, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "read frontend asset"})
 		return true
 	}
@@ -304,12 +379,28 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, files fs.FS, name s
 func (s *server) withMethod(method string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != method {
+			logRequestFailure(r, http.StatusMethodNotAllowed, "method not allowed")
 			w.Header().Set("Allow", method)
 			writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 			return
 		}
 		next(w, r)
 	}
+}
+
+func logRequestFailure(r *http.Request, status int, format string, args ...any) {
+	log.Printf("rest api failure method=%s path=%s status=%d remote=%s: %s", r.Method, r.URL.Path, status, r.RemoteAddr, fmt.Sprintf(format, args...))
+}
+
+func writeMessageEvent(w io.Writer, msg model.Message) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", data); err != nil {
+		return err
+	}
+	return nil
 }
 
 func parseMessagesQuery(r *http.Request) (storage.Query, error) {

@@ -15,7 +15,7 @@ import {
   Upload,
   Wifi
 } from "lucide-react";
-import { importMessages, listMessages, sendTestEvent } from "./api";
+import { importMessages, listMessages, openMessageStream, sendTestEvent } from "./api";
 import type { SyslogMessage } from "./types";
 
 const messageLimit = 500;
@@ -62,8 +62,49 @@ function sortedUniqueHosts(hosts: string[]): string[] {
   );
 }
 
+function messageSearchText(message: SyslogMessage): string {
+  return [
+    message.id,
+    message.transport,
+    message.source,
+    message.hostname,
+    message.app_name,
+    message.proc_id,
+    message.msg_id,
+    message.tag,
+    message.message,
+    formatJSON(message.structured_data),
+    formatJSON(message.raw)
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchesVisibleFilters(message: SyslogMessage, filter: string, hosts: string[]): boolean {
+  if (hosts.length > 0 && !hosts.includes(message.hostname ?? "")) {
+    return false;
+  }
+
+  const query = filter.trim().toLowerCase();
+  if (query !== "" && !messageSearchText(message).includes(query)) {
+    return false;
+  }
+
+  return true;
+}
+
+function receivedAtMillis(message: SyslogMessage): number {
+  const parsed = Date.parse(message.received_at);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function compareMessagesLatestFirst(left: SyslogMessage, right: SyslogMessage): number {
+  return receivedAtMillis(right) - receivedAtMillis(left);
+}
+
 export default function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const messagesRef = useRef<SyslogMessage[]>([]);
   const [messages, setMessages] = useState<SyslogMessage[]>([]);
   const [filterInput, setFilterInput] = useState("");
   const [filter, setFilter] = useState("");
@@ -73,6 +114,7 @@ export default function App() {
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [liveUnavailable, setLiveUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
@@ -94,6 +136,14 @@ export default function App() {
     () => sortedUniqueHosts([...knownHosts, ...selectedHosts]),
     [knownHosts, selectedHosts]
   );
+  const liveDisabled = page !== 0 || liveUnavailable;
+  const liveTitle = liveUnavailable
+    ? "Live updates unavailable"
+    : page !== 0
+      ? "Live updates are only available on page 1"
+      : autoRefresh
+        ? "Pause live updates"
+        : "Resume live updates";
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
@@ -104,6 +154,7 @@ export default function App() {
           { query: filter, hosts: selectedHosts, limit: messageLimit, offset },
           signal
         );
+        messagesRef.current = response.data;
         setMessages(response.data);
         setHasMore(response.meta.has_more);
         setKnownHosts((current) =>
@@ -133,14 +184,59 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!autoRefresh) {
+    if (liveDisabled && autoRefresh) {
+      setAutoRefresh(false);
+    }
+  }, [autoRefresh, liveDisabled]);
+
+  useEffect(() => {
+    if (!autoRefresh || page !== 0 || liveUnavailable) {
       return undefined;
     }
-    const handle = window.setInterval(() => {
-      void refresh();
-    }, 2000);
-    return () => window.clearInterval(handle);
-  }, [autoRefresh, refresh]);
+
+    const events = openMessageStream();
+    const handleMessage = (event: MessageEvent) => {
+      let message: SyslogMessage;
+      try {
+        message = JSON.parse(event.data) as SyslogMessage;
+      } catch {
+        setError("Received an invalid live message event");
+        return;
+      }
+
+      setKnownHosts((current) => sortedUniqueHosts([...current, message.hostname ?? ""]));
+      setLastUpdated(new Date());
+
+      if (!matchesVisibleFilters(message, filter, selectedHosts)) {
+        return;
+      }
+
+      const merged = [
+        message,
+        ...messagesRef.current.filter((existing) => existing.id !== message.id)
+      ].sort(compareMessagesLatestFirst);
+      const nextMessages = merged.slice(0, messageLimit);
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+      if (merged.length > messageLimit) {
+        setHasMore(true);
+      }
+    };
+    const handleError = () => {
+      setAutoRefresh(false);
+      setLiveUnavailable(true);
+      setError("Live updates disabled because the SSE connection failed. Use Refresh for manual updates.");
+      events.close();
+    };
+
+    events.addEventListener("message", handleMessage);
+    events.addEventListener("error", handleError);
+    return () => {
+      events.removeEventListener("message", handleMessage);
+      events.removeEventListener("error", handleError);
+      events.close();
+    };
+  }, [autoRefresh, filter, liveUnavailable, page, selectedHosts]);
 
   const latestReceived = useMemo(() => {
     if (messages.length === 0) {
@@ -155,15 +251,12 @@ export default function App() {
     setNotice(null);
     try {
       await sendTestEvent();
-      window.setTimeout(() => {
-        void refresh();
-      }, 300);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
       setSendingTest(false);
     }
-  }, [refresh]);
+  }, []);
 
   const handleImportFile = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -302,8 +395,13 @@ export default function App() {
         <label className="switch">
           <input
             type="checkbox"
-            checked={autoRefresh}
-            onChange={(event) => setAutoRefresh(event.target.checked)}
+            checked={autoRefresh && !liveDisabled}
+            disabled={liveDisabled}
+            onChange={(event) => {
+              if (!liveDisabled) {
+                setAutoRefresh(event.target.checked);
+              }
+            }}
           />
           <span className="switch-track" aria-hidden="true">
             <span />
@@ -385,11 +483,16 @@ export default function App() {
         <button
           type="button"
           className="icon-button"
-          onClick={() => setAutoRefresh((value) => !value)}
-          title={autoRefresh ? "Pause live updates" : "Resume live updates"}
-          aria-label={autoRefresh ? "Pause live updates" : "Resume live updates"}
+          onClick={() => {
+            if (!liveDisabled) {
+              setAutoRefresh((value) => !value);
+            }
+          }}
+          disabled={liveDisabled}
+          title={liveTitle}
+          aria-label={liveTitle}
         >
-          {autoRefresh ? <Pause size={18} /> : <Play size={18} />}
+          {autoRefresh && !liveDisabled ? <Pause size={18} /> : <Play size={18} />}
         </button>
       </section>
 

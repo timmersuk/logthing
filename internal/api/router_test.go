@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -106,6 +107,77 @@ func TestMessagesReturnPaginationMeta(t *testing.T) {
 	}
 	if queries[0].Limit != 2 || queries[0].Offset != 10 || !reflect.DeepEqual(queries[0].Hosts, []string{"edge-a", "edge-b"}) {
 		t.Fatalf("store query = %#v, want overfetch limit, offset, and hosts", queries[0])
+	}
+}
+
+func TestMessageStreamRequiresBasicAuth(t *testing.T) {
+	router := newTestRouter(t, fakeStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages/stream", nil)
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestMessageStreamEmitsPublishedMessages(t *testing.T) {
+	events := &fakeSubscriber{
+		messages:   make(chan model.Message, 1),
+		subscribed: make(chan struct{}),
+	}
+	router := newTestRouterWithEvents(t, fakeStore{}, events)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages/stream", nil).WithContext(ctx)
+	req.SetBasicAuth("admin", "secret")
+	res := newStreamRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		router.ServeHTTP(res, req)
+		close(done)
+	}()
+
+	select {
+	case <-events.subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stream subscription")
+	}
+
+	events.messages <- model.Message{
+		ID:         "one",
+		ReceivedAt: time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC),
+		Hostname:   "edge-a",
+		Message:    "link changed",
+	}
+
+	select {
+	case <-res.messageWritten:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stream event")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stream shutdown")
+	}
+
+	if res.Code() != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.Code(), http.StatusOK)
+	}
+	body := res.Body()
+	if !strings.Contains(body, ": connected\n\n") {
+		t.Fatalf("body = %q, want connected comment", body)
+	}
+	if !strings.Contains(body, "event: message\n") || !strings.Contains(body, `"id":"one"`) {
+		t.Fatalf("body = %q, want message event", body)
 	}
 }
 
@@ -295,11 +367,92 @@ func TestTestEventSendsWithBasicAuth(t *testing.T) {
 	}
 }
 
+type fakeSubscriber struct {
+	messages   chan model.Message
+	subscribed chan struct{}
+	once       sync.Once
+}
+
+func (s *fakeSubscriber) Subscribe() (<-chan model.Message, func()) {
+	s.once.Do(func() {
+		close(s.subscribed)
+	})
+	return s.messages, func() {}
+}
+
+type streamRecorder struct {
+	header         http.Header
+	messageWritten chan struct{}
+	messageOnce    sync.Once
+	mu             sync.Mutex
+	code           int
+	body           strings.Builder
+}
+
+func newStreamRecorder() *streamRecorder {
+	return &streamRecorder{
+		header:         make(http.Header),
+		messageWritten: make(chan struct{}),
+	}
+}
+
+func (r *streamRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *streamRecorder) Write(data []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	n, err := r.body.Write(data)
+	if strings.Contains(r.body.String(), "event: message\n") {
+		r.messageOnce.Do(func() {
+			close(r.messageWritten)
+		})
+	}
+	return n, err
+}
+
+func (r *streamRecorder) WriteHeader(status int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.code == 0 {
+		r.code = status
+	}
+}
+
+func (r *streamRecorder) Flush() {}
+
+func (r *streamRecorder) Code() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.code
+}
+
+func (r *streamRecorder) Body() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.body.String()
+}
+
 func newTestRouter(t *testing.T, store storage.Store) http.Handler {
 	t.Helper()
 
+	return newTestRouterWithEvents(t, store, nil)
+}
+
+func newTestRouterWithEvents(t *testing.T, store storage.Store, events MessageSubscriber) http.Handler {
+	t.Helper()
+
 	router, err := NewRouter(Config{
-		Store: store,
+		Store:  store,
+		Events: events,
 		Frontend: fstest.MapFS{
 			"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
 		},

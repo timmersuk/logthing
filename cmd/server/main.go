@@ -13,6 +13,7 @@ import (
 	"github.com/timmersuk/logthing/internal/api"
 	"github.com/timmersuk/logthing/internal/config"
 	"github.com/timmersuk/logthing/internal/openapi"
+	"github.com/timmersuk/logthing/internal/realtime"
 	"github.com/timmersuk/logthing/internal/storage"
 	"github.com/timmersuk/logthing/internal/swaggerui"
 	sysloglistener "github.com/timmersuk/logthing/internal/syslog"
@@ -37,6 +38,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	events := realtime.NewHub()
+	publishingStore := realtime.NewPublishingStore(store, events)
 
 	frontend, err := fs.Sub(web.Files, "dist")
 	if err != nil {
@@ -48,7 +51,8 @@ func run() error {
 	}
 
 	router, err := api.NewRouter(api.Config{
-		Store:       store,
+		Store:       publishingStore,
+		Events:      events,
 		Frontend:    frontend,
 		SwaggerUI:   swagger,
 		OpenAPISpec: openapi.Spec,
@@ -67,7 +71,7 @@ func run() error {
 		UDPAddr: cfg.SyslogUDPAddr,
 		TCPAddr: cfg.SyslogTCPAddr,
 		Format:  cfg.SyslogFormat,
-	}, store)
+	}, publishingStore)
 	if err != nil {
 		return err
 	}
