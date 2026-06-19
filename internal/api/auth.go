@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"net/http"
@@ -13,8 +12,8 @@ type Credentials struct {
 }
 
 type basicAuth struct {
-	usernameHash [sha256.Size]byte
-	passwordHash [sha256.Size]byte
+	username []byte
+	password []byte
 }
 
 func newBasicAuth(credentials Credentials) (*basicAuth, error) {
@@ -25,8 +24,8 @@ func newBasicAuth(credentials Credentials) (*basicAuth, error) {
 		return nil, errors.New("password is required")
 	}
 	return &basicAuth{
-		usernameHash: sha256.Sum256([]byte(credentials.Username)),
-		passwordHash: sha256.Sum256([]byte(credentials.Password)),
+		username: []byte(credentials.Username),
+		password: []byte(credentials.Password),
 	}, nil
 }
 
@@ -43,10 +42,7 @@ func (a *basicAuth) require(next http.Handler) http.Handler {
 }
 
 func (a *basicAuth) matches(username, password string) bool {
-	usernameHash := sha256.Sum256([]byte(username))
-	passwordHash := sha256.Sum256([]byte(password))
-
-	usernameOK := subtle.ConstantTimeCompare(usernameHash[:], a.usernameHash[:]) == 1
-	passwordOK := subtle.ConstantTimeCompare(passwordHash[:], a.passwordHash[:]) == 1
+	usernameOK := subtle.ConstantTimeCompare([]byte(username), a.username) == 1
+	passwordOK := subtle.ConstantTimeCompare([]byte(password), a.password) == 1
 	return usernameOK && passwordOK
 }
