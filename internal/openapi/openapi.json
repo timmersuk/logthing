@@ -1,0 +1,419 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Logthing REST API",
+    "version": "0.1.0",
+    "description": "API for browsing and filtering syslog messages received by Logthing."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current Logthing server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "Service health checks"
+    },
+    {
+      "name": "messages",
+      "description": "Syslog message history"
+    },
+    {
+      "name": "test",
+      "description": "Test event generation"
+    }
+  ],
+  "paths": {
+    "/healthcheck": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Check service health",
+        "description": "Returns a basic service health response. This endpoint does not require authentication.",
+        "operationId": "getHealthcheck",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthcheckResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/messages": {
+      "get": {
+        "tags": ["messages"],
+        "summary": "List syslog messages",
+        "description": "Returns syslog messages from local storage in latest-first order. Results can be filtered by free text and received-at time window.",
+        "operationId": "listMessages",
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive text filter across common syslog fields, structured data, and raw parser fields.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of messages to return. Defaults to 200 and cannot exceed 2000.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000,
+              "default": 200
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "RFC3339 timestamp lower bound applied to received_at.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "description": "RFC3339 timestamp upper bound applied to received_at.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Basic Auth credentials",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Message query failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-event": {
+      "post": {
+        "tags": ["test"],
+        "summary": "Send a test syslog event",
+        "description": "Asks the server to send one RFC5424 syslog event to its configured test-event destination. Browsers cannot send raw UDP or TCP syslog packets directly, so the frontend uses this endpoint.",
+        "operationId": "sendTestEvent",
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Test event was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestEventResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Basic Auth credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The server could not send the syslog event to the configured destination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Test event sender is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic"
+      }
+    },
+    "schemas": {
+      "HealthcheckResponse": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "build_id": {
+            "type": "string",
+            "example": "dev"
+          }
+        }
+      },
+      "MessagesResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/MessagesMeta"
+          }
+        }
+      },
+      "MessagesMeta": {
+        "type": "object",
+        "required": ["count", "limit"],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "example": 1
+          },
+          "limit": {
+            "type": "integer",
+            "example": 50
+          }
+        }
+      },
+      "TestEventRequest": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "logthing browser test event"
+          }
+        }
+      },
+      "TestEventResponse": {
+        "type": "object",
+        "required": ["status", "network", "address", "payload", "message", "meta"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "sent"
+          },
+          "network": {
+            "type": "string",
+            "example": "udp"
+          },
+          "address": {
+            "type": "string",
+            "example": "127.0.0.1:5514"
+          },
+          "payload": {
+            "type": "string",
+            "example": "<13>1 2026-06-19T12:00:00Z host logthing 123 test - logthing test event"
+          },
+          "message": {
+            "type": "string",
+            "example": "logthing test event"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/TestEventMeta"
+          }
+        }
+      },
+      "TestEventMeta": {
+        "type": "object",
+        "required": ["direct_browser_syslog", "delivery"],
+        "properties": {
+          "direct_browser_syslog": {
+            "type": "boolean",
+            "example": false
+          },
+          "delivery": {
+            "type": "string",
+            "example": "server-side syslog sender"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "required": ["id", "received_at"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "f2e4a19c6f50429bbf7afc1fcb705fa6"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-06-19T12:00:00Z"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-06-19T12:00:00Z"
+          },
+          "transport": {
+            "type": "string",
+            "example": "udp/tcp"
+          },
+          "source": {
+            "type": "string",
+            "example": "127.0.0.1:51234"
+          },
+          "priority": {
+            "type": "integer",
+            "example": 13
+          },
+          "facility": {
+            "type": "integer",
+            "example": 1
+          },
+          "severity": {
+            "type": "integer",
+            "example": 5
+          },
+          "hostname": {
+            "type": "string",
+            "example": "edge-1"
+          },
+          "app_name": {
+            "type": "string",
+            "example": "router"
+          },
+          "proc_id": {
+            "type": "string",
+            "example": "123"
+          },
+          "msg_id": {
+            "type": "string",
+            "example": "abc"
+          },
+          "tag": {
+            "type": "string",
+            "example": "router"
+          },
+          "message": {
+            "type": "string",
+            "example": "link changed"
+          },
+          "structured_data": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Raw key/value output from go-syslog."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "authentication required"
+          }
+        }
+      }
+    }
+  }
+}

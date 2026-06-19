@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+bin
+data
+frontend/node_modules
+frontend/.vite
+frontend/.turbo
+*.exe
+*.test
+*.out
+coverage.*
