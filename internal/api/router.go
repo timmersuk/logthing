@@ -120,6 +120,7 @@ func NewRouter(cfg Config) (http.Handler, error) {
 
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/v1/messages", srv.withMethod(http.MethodGet, srv.handleMessages))
+	apiMux.HandleFunc("/api/v1/messages/import", srv.withMethod(http.MethodPost, srv.handleImportMessages))
 	apiMux.HandleFunc("/api/v1/test-event", srv.withMethod(http.MethodPost, srv.handleTestEvent))
 
 	mux := http.NewServeMux()
@@ -167,6 +168,24 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			Offset:  query.Offset,
 			HasMore: hasMore,
 		},
+	})
+}
+
+func (s *server) handleImportMessages(w http.ResponseWriter, r *http.Request) {
+	result, err := importMessages(r.Context(), s.store, r.Body)
+	if err != nil {
+		if isImportValidationError(err) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "import messages"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, importMessagesResponse{
+		Status:   "imported",
+		Imported: result.imported,
+		Skipped:  result.skipped,
 	})
 }
 

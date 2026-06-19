@@ -110,6 +110,7 @@ Authenticated:
 | Method | Path | Query | Description |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/messages` | `q`, `host`, `limit`, `offset`, `since`, `until` | Returns latest-first messages from local storage. |
+| `POST` | `/api/v1/messages/import` | none | Imports newline-delimited JSON messages into local storage. |
 | `POST` | `/api/v1/test-event` | none | Sends one server-side RFC5424 test event to the configured syslog destination. |
 
 `host` is an exact syslog hostname filter and can be repeated for multiple
@@ -154,15 +155,33 @@ The response shape is:
 }
 ```
 
+Import accepts NDJSON in the body. Blank lines are skipped, and invalid JSON,
+timestamps, facilities, or severities return `400` with the failing line number.
+Imported messages use the imported timestamp for both `timestamp` and
+`received_at`, so they sort into the historical timeline. Supported fields are
+`timestamp`, `host`, `program`, `pid`, `severity`, `facility`, and `message`.
+Facility and severity may be syslog names such as `daemon` and `warning` or
+their numeric values.
+
+Example:
+
+```powershell
+curl.exe -u admin:secret `
+  -H "Content-Type: application/x-ndjson" `
+  --data-binary "@router.ndjson" `
+  "http://localhost:8080/api/v1/messages/import"
+```
+
 ## Frontend Workflow
 
 The UI is the first screen at `/`. It shows the message timeline in a wide,
 scrollable table with syslog fields as columns. The host selector maps to
 repeated `host` query parameters, the filter box maps to `q`, and the page
 controls map to `offset`. Live refresh polls the current page every two
-seconds. The export button downloads the currently visible rows as NDJSON. The
-`Send test event` button calls `/api/v1/test-event`, which asks the server to
-send one syslog message to `LOGTHING_TEST_EVENT_TARGET`.
+seconds. The import button uploads NDJSON to `/api/v1/messages/import`, and the
+export button downloads the currently visible rows as NDJSON. The `Send test
+event` button calls `/api/v1/test-event`, which asks the server to send one
+syslog message to `LOGTHING_TEST_EVENT_TARGET`.
 
 Browsers cannot send raw UDP or TCP syslog packets directly through normal web
 APIs, so the button uses a server-side sender. The CLI sender above is the

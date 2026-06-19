@@ -26,3 +26,9 @@ export interface MessagesResponse {
     has_more: boolean;
   };
 }
+
+export interface ImportMessagesResponse {
+  status: string;
+  imported: number;
+  skipped: number;
+}

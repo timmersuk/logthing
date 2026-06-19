@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -17,9 +18,13 @@ import (
 type fakeStore struct {
 	messages []model.Message
 	queries  *[]storage.Query
+	appends  *[]model.Message
 }
 
-func (s fakeStore) Append(context.Context, model.Message) error {
+func (s fakeStore) Append(_ context.Context, msg model.Message) error {
+	if s.appends != nil {
+		*s.appends = append(*s.appends, msg)
+	}
 	return nil
 }
 
@@ -126,6 +131,89 @@ func TestParseMessagesQueryRejectsNegativeOffset(t *testing.T) {
 	_, err := parseMessagesQuery(req)
 	if err == nil {
 		t.Fatal("parseMessagesQuery() error = nil, want error")
+	}
+}
+
+func TestImportMessagesRequiresBasicAuth(t *testing.T) {
+	router := newTestRouter(t, fakeStore{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/import", strings.NewReader(""))
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestImportMessagesAcceptsNDJSON(t *testing.T) {
+	var appends []model.Message
+	router := newTestRouter(t, fakeStore{appends: &appends})
+
+	body := strings.NewReader(`{"timestamp":"2026-06-19T00:24:11+01:00","host":"potato","program":"pppd","pid":"2017","severity":"warning","facility":"daemon","message":" Connected to xx:xx:xx:xx:xx:xx via interface eth0"}` + "\n\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/import", body)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var response importMessagesResponse
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "imported" || response.Imported != 1 || response.Skipped != 1 {
+		t.Fatalf("response = %#v, want one imported and one skipped", response)
+	}
+	if len(appends) != 1 {
+		t.Fatalf("appended messages = %d, want 1", len(appends))
+	}
+
+	msg := appends[0]
+	if msg.ID == "" {
+		t.Fatal("imported message ID is empty")
+	}
+	if msg.Transport != "import" || msg.Hostname != "potato" || msg.AppName != "pppd" || msg.Tag != "pppd" || msg.ProcID != "2017" {
+		t.Fatalf("imported message fields = %#v, want mapped syslog fields", msg)
+	}
+	if msg.Timestamp == nil || !msg.Timestamp.Equal(time.Date(2026, 6, 18, 23, 24, 11, 0, time.UTC)) {
+		t.Fatalf("timestamp = %v, want UTC converted imported timestamp", msg.Timestamp)
+	}
+	if msg.ReceivedAt != *msg.Timestamp {
+		t.Fatalf("received_at = %v, want imported timestamp %v", msg.ReceivedAt, *msg.Timestamp)
+	}
+	if msg.Facility == nil || *msg.Facility != 3 {
+		t.Fatalf("facility = %v, want daemon value 3", msg.Facility)
+	}
+	if msg.Severity == nil || *msg.Severity != 4 {
+		t.Fatalf("severity = %v, want warning value 4", msg.Severity)
+	}
+	if msg.Priority == nil || *msg.Priority != 28 {
+		t.Fatalf("priority = %v, want 28", msg.Priority)
+	}
+	if msg.Message != " Connected to xx:xx:xx:xx:xx:xx via interface eth0" {
+		t.Fatalf("message = %q, want imported message text", msg.Message)
+	}
+}
+
+func TestImportMessagesRejectsInvalidNDJSON(t *testing.T) {
+	router := newTestRouter(t, fakeStore{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/messages/import", strings.NewReader(`{"timestamp":"not-a-time"}`))
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(res.Body.String(), "line 1") {
+		t.Fatalf("body = %q, want line number", res.Body.String())
 	}
 }
 

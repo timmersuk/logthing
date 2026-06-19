@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   ChevronDown,
   ChevronLeft,
@@ -12,9 +12,10 @@ import {
   Send,
   Server,
   Shield,
+  Upload,
   Wifi
 } from "lucide-react";
-import { listMessages, sendTestEvent } from "./api";
+import { importMessages, listMessages, sendTestEvent } from "./api";
 import type { SyslogMessage } from "./types";
 
 const messageLimit = 500;
@@ -62,6 +63,7 @@ function sortedUniqueHosts(hosts: string[]): string[] {
 }
 
 export default function App() {
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [messages, setMessages] = useState<SyslogMessage[]>([]);
   const [filterInput, setFilterInput] = useState("");
   const [filter, setFilter] = useState("");
@@ -72,8 +74,10 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -148,6 +152,7 @@ export default function App() {
   const handleSendTestEvent = useCallback(async () => {
     setSendingTest(true);
     setError(null);
+    setNotice(null);
     try {
       await sendTestEvent();
       window.setTimeout(() => {
@@ -159,6 +164,34 @@ export default function App() {
       setSendingTest(false);
     }
   }, [refresh]);
+
+  const handleImportFile = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.currentTarget.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      setImporting(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const response = await importMessages(file);
+        setNotice(`Imported ${response.imported} messages, skipped ${response.skipped} blank lines`);
+        if (page === 0) {
+          void refresh();
+        } else {
+          setPage(0);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Request failed");
+      } finally {
+        setImporting(false);
+        event.currentTarget.value = "";
+      }
+    },
+    [page, refresh]
+  );
 
   const clearHosts = useCallback(() => {
     setPage(0);
@@ -298,6 +331,23 @@ export default function App() {
           <span>Export NDJSON</span>
         </button>
 
+        <button
+          type="button"
+          className="command-button secondary-command"
+          onClick={() => importInputRef.current?.click()}
+          disabled={importing}
+        >
+          <Upload size={17} className={importing ? "spin" : ""} />
+          <span>Import NDJSON</span>
+        </button>
+        <input
+          ref={importInputRef}
+          className="file-input"
+          type="file"
+          accept=".ndjson,application/x-ndjson,text/plain,application/json"
+          onChange={(event) => void handleImportFile(event)}
+        />
+
         <div className="pager" aria-label="Message pages">
           <button
             type="button"
@@ -344,6 +394,7 @@ export default function App() {
       </section>
 
       {error && <div className="error-banner">{error}</div>}
+      {notice && <div className="notice-banner">{notice}</div>}
 
       <main className="table-shell">
         <table>

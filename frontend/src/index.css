@@ -104,7 +104,7 @@ p {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(12rem, 16rem) minmax(220px, 1fr) repeat(6, auto);
+  grid-template-columns: minmax(12rem, 16rem) minmax(220px, 1fr) repeat(7, auto);
   align-items: center;
   gap: 0.75rem;
   padding: 0.85rem 1.25rem;
@@ -354,6 +354,10 @@ p {
   text-align: center;
 }
 
+.file-input {
+  display: none;
+}
+
 .error-banner {
   margin: 0.85rem 1.25rem 0;
   padding: 0.8rem 0.95rem;
@@ -361,6 +365,15 @@ p {
   border-radius: 8px;
   color: #7c2d12;
   background: #fff7ed;
+}
+
+.notice-banner {
+  margin: 0.85rem 1.25rem 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid #a7d8b6;
+  border-radius: 8px;
+  color: #14532d;
+  background: #f0fdf4;
 }
 
 .table-shell {

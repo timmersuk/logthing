@@ -177,6 +177,77 @@
         }
       }
     },
+    "/api/v1/messages/import": {
+      "post": {
+        "tags": ["messages"],
+        "summary": "Import syslog messages",
+        "description": "Imports newline-delimited JSON records into local message storage. Each line must contain a JSON object with a timestamp field and may include host, program, pid, severity, facility, and message fields.",
+        "operationId": "importMessages",
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-ndjson": {
+              "schema": {
+                "type": "string",
+                "example": "{\"timestamp\":\"2026-06-19T00:24:11+01:00\",\"host\":\"potato\",\"program\":\"pppd\",\"pid\":\"2017\",\"severity\":\"warning\",\"facility\":\"daemon\",\"message\":\" Connected to xx:xx:xx:xx:xx:xx via interface eth0\"}\n"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Messages were imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid import body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Basic Auth credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Message import failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-event": {
       "post": {
         "tags": ["test"],
@@ -309,6 +380,25 @@
           "has_more": {
             "type": "boolean",
             "example": true
+          }
+        }
+      },
+      "ImportMessagesResponse": {
+        "type": "object",
+        "required": ["status", "imported", "skipped"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "imported"
+          },
+          "imported": {
+            "type": "integer",
+            "example": 1
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Blank lines skipped during import.",
+            "example": 0
           }
         }
       },

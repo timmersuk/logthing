@@ -1,4 +1,4 @@
-import type { MessagesResponse } from "./types";
+import type { ImportMessagesResponse, MessagesResponse } from "./types";
 
 interface ListMessagesParams {
   query: string;
@@ -58,4 +58,29 @@ export async function sendTestEvent(signal?: AbortSignal): Promise<void> {
     }
     throw new Error(`Request failed with HTTP ${response.status}`);
   }
+}
+
+export async function importMessages(
+  file: File,
+  signal?: AbortSignal
+): Promise<ImportMessagesResponse> {
+  const response = await fetch("/api/v1/messages/import", {
+    method: "POST",
+    signal,
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": file.type || "application/x-ndjson"
+    },
+    body: file
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Authentication required");
+    }
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `Request failed with HTTP ${response.status}`);
+  }
+
+  return response.json() as Promise<ImportMessagesResponse>;
 }
