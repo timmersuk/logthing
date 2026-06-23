@@ -18,7 +18,6 @@ import {
 import { importMessages, listMessages, openMessageStream, sendTestEvent } from "./api";
 import type { SyslogMessage } from "./types";
 
-const messageLimit = 500;
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -122,15 +121,59 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      setFilter(filterInput);
-      setPage(0);
-    }, 250);
-    return () => window.clearTimeout(handle);
-  }, [filterInput]);
+  const [pageSizeSetting, setPageSizeSetting] = useState<number | "auto">(() => {
+    const saved = localStorage.getItem("logthing_page_size");
+    if (saved === "auto") return "auto";
+    if (saved) {
+      const val = parseInt(saved, 10);
+      if (!isNaN(val)) return val;
+    }
+    return 100;
+  });
+  const [calculatedLimit, setCalculatedLimit] = useState<number>(100);
 
-  const offset = page * messageLimit;
+  useEffect(() => {
+    localStorage.setItem("logthing_page_size", String(pageSizeSetting));
+  }, [pageSizeSetting]);
+
+  const errorString = error ? String(error) : "";
+  const noticeString = notice ? String(notice) : "";
+
+  useEffect(() => {
+    if (pageSizeSetting !== "auto") {
+      setCalculatedLimit(pageSizeSetting);
+      return;
+    }
+
+    const updateSize = () => {
+      const topbar = document.querySelector(".topbar");
+      const toolbar = document.querySelector(".toolbar");
+      const errorBanner = document.querySelector(".error-banner");
+      const noticeBanner = document.querySelector(".notice-banner");
+
+      const topbarHeight = topbar ? topbar.getBoundingClientRect().height : 72;
+      const toolbarHeight = toolbar ? toolbar.getBoundingClientRect().height : 67;
+      const errorHeight = errorBanner ? errorBanner.getBoundingClientRect().height : 0;
+      const noticeHeight = noticeBanner ? noticeBanner.getBoundingClientRect().height : 0;
+
+      const overhead = topbarHeight + toolbarHeight + errorHeight + noticeHeight + 80;
+      const availableHeight = window.innerHeight - overhead;
+      const rowHeight = 39.2; // 2.45rem * 16px = 39.2px
+      const count = Math.max(10, Math.floor(availableHeight / rowHeight));
+
+      setCalculatedLimit(count);
+    };
+
+    updateSize();
+    window.addEventListener("resize", updateSize);
+    const timeoutId = setTimeout(updateSize, 100);
+    return () => {
+      window.removeEventListener("resize", updateSize);
+      clearTimeout(timeoutId);
+    };
+  }, [pageSizeSetting, errorString, noticeString]);
+
+  const offset = page * calculatedLimit;
 
   const hostOptions = useMemo(
     () => sortedUniqueHosts([...knownHosts, ...selectedHosts]),
@@ -151,7 +194,7 @@ export default function App() {
       setError(null);
       try {
         const response = await listMessages(
-          { query: filter, hosts: selectedHosts, limit: messageLimit, offset },
+          { query: filter, hosts: selectedHosts, limit: calculatedLimit, offset },
           signal
         );
         messagesRef.current = response.data;
@@ -174,8 +217,16 @@ export default function App() {
         setLoading(false);
       }
     },
-    [filter, offset, selectedHosts]
+    [filter, offset, selectedHosts, calculatedLimit]
   );
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setFilter(filterInput);
+      setPage(0);
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [filterInput]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -215,10 +266,10 @@ export default function App() {
         message,
         ...messagesRef.current.filter((existing) => existing.id !== message.id)
       ].sort(compareMessagesLatestFirst);
-      const nextMessages = merged.slice(0, messageLimit);
+      const nextMessages = merged.slice(0, calculatedLimit);
       messagesRef.current = nextMessages;
       setMessages(nextMessages);
-      if (merged.length > messageLimit) {
+      if (merged.length > calculatedLimit) {
         setHasMore(true);
       }
     };
@@ -236,7 +287,7 @@ export default function App() {
       events.removeEventListener("error", handleError);
       events.close();
     };
-  }, [autoRefresh, filter, liveUnavailable, page, selectedHosts]);
+  }, [autoRefresh, filter, liveUnavailable, page, selectedHosts, calculatedLimit]);
 
   const latestReceived = useMemo(() => {
     if (messages.length === 0) {
@@ -328,10 +379,6 @@ export default function App() {
           </div>
         </div>
         <div className="status-strip" aria-live="polite">
-          <span className="status-pill">
-            <Database size={15} />
-            {messages.length}
-          </span>
           <span className="status-pill">
             <Shield size={15} />
             Basic auth
@@ -468,6 +515,25 @@ export default function App() {
           >
             <ChevronRight size={18} />
           </button>
+          <span className="pager-separator" aria-hidden="true">|</span>
+          <select
+            className="page-size-select"
+            value={pageSizeSetting}
+            onChange={(event) => {
+              const val = event.target.value;
+              setPageSizeSetting(val === "auto" ? "auto" : Number(val));
+              setPage(0);
+            }}
+            title="Select page size"
+            aria-label="Select page size"
+          >
+            <option value={25}>25 rows</option>
+            <option value={50}>50 rows</option>
+            <option value={100}>100 rows</option>
+            <option value={250}>250 rows</option>
+            <option value={500}>500 rows</option>
+            <option value="auto">Auto (Fit)</option>
+          </select>
         </div>
 
         <button

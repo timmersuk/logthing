@@ -354,6 +354,33 @@ p {
   text-align: center;
 }
 
+.pager-separator {
+  color: #cdd8d1;
+  margin: 0 0.25rem;
+}
+
+.page-size-select {
+  height: 2.25rem;
+  padding: 0 0.5rem;
+  border: 1px solid #cdd8d1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26342c;
+  outline: none;
+  font-size: 0.86rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.page-size-select:hover {
+  border-color: #0d9488;
+}
+
+.page-size-select:focus {
+  border-color: #0d9488;
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
+}
+
 .file-input {
   display: none;
 }
