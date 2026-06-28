@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import {
   ChevronDown,
   ChevronLeft,
@@ -13,11 +20,15 @@ import {
   Server,
   Shield,
   Upload,
-  Wifi
+  Wifi,
 } from "lucide-react";
-import { importMessages, listMessages, openMessageStream, sendTestEvent } from "./api";
+import {
+  importMessages,
+  listMessages,
+  openMessageStream,
+  sendTestEvent,
+} from "./api";
 import type { SyslogMessage } from "./types";
-
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -56,9 +67,9 @@ function hostLabel(hosts: string[]): string {
 }
 
 function sortedUniqueHosts(hosts: string[]): string[] {
-  return Array.from(new Set(hosts.map((host) => host.trim()).filter(Boolean))).sort((a, b) =>
-    a.localeCompare(b)
-  );
+  return Array.from(
+    new Set(hosts.map((host) => host.trim()).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
 }
 
 function messageSearchText(message: SyslogMessage): string {
@@ -73,13 +84,17 @@ function messageSearchText(message: SyslogMessage): string {
     message.tag,
     message.message,
     formatJSON(message.structured_data),
-    formatJSON(message.raw)
+    formatJSON(message.raw),
   ]
     .join(" ")
     .toLowerCase();
 }
 
-function matchesVisibleFilters(message: SyslogMessage, filter: string, hosts: string[]): boolean {
+function matchesVisibleFilters(
+  message: SyslogMessage,
+  filter: string,
+  hosts: string[],
+): boolean {
   if (hosts.length > 0 && !hosts.includes(message.hostname ?? "")) {
     return false;
   }
@@ -97,7 +112,10 @@ function receivedAtMillis(message: SyslogMessage): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function compareMessagesLatestFirst(left: SyslogMessage, right: SyslogMessage): number {
+function compareMessagesLatestFirst(
+  left: SyslogMessage,
+  right: SyslogMessage,
+): number {
   return receivedAtMillis(right) - receivedAtMillis(left);
 }
 
@@ -121,15 +139,17 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const [pageSizeSetting, setPageSizeSetting] = useState<number | "auto">(() => {
-    const saved = localStorage.getItem("logthing_page_size");
-    if (saved === "auto") return "auto";
-    if (saved) {
-      const val = parseInt(saved, 10);
-      if (!isNaN(val)) return val;
-    }
-    return 100;
-  });
+  const [pageSizeSetting, setPageSizeSetting] = useState<number | "auto">(
+    () => {
+      const saved = localStorage.getItem("logthing_page_size");
+      if (saved === "auto") return "auto";
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val)) return val;
+      }
+      return 100;
+    },
+  );
   const [calculatedLimit, setCalculatedLimit] = useState<number>(100);
 
   useEffect(() => {
@@ -152,11 +172,18 @@ export default function App() {
       const noticeBanner = document.querySelector(".notice-banner");
 
       const topbarHeight = topbar ? topbar.getBoundingClientRect().height : 72;
-      const toolbarHeight = toolbar ? toolbar.getBoundingClientRect().height : 67;
-      const errorHeight = errorBanner ? errorBanner.getBoundingClientRect().height : 0;
-      const noticeHeight = noticeBanner ? noticeBanner.getBoundingClientRect().height : 0;
+      const toolbarHeight = toolbar
+        ? toolbar.getBoundingClientRect().height
+        : 67;
+      const errorHeight = errorBanner
+        ? errorBanner.getBoundingClientRect().height
+        : 0;
+      const noticeHeight = noticeBanner
+        ? noticeBanner.getBoundingClientRect().height
+        : 0;
 
-      const overhead = topbarHeight + toolbarHeight + errorHeight + noticeHeight + 80;
+      const overhead =
+        topbarHeight + toolbarHeight + errorHeight + noticeHeight + 80;
       const availableHeight = window.innerHeight - overhead;
       const rowHeight = 39.2; // 2.45rem * 16px = 39.2px
       const count = Math.max(10, Math.floor(availableHeight / rowHeight));
@@ -177,7 +204,7 @@ export default function App() {
 
   const hostOptions = useMemo(
     () => sortedUniqueHosts([...knownHosts, ...selectedHosts]),
-    [knownHosts, selectedHosts]
+    [knownHosts, selectedHosts],
   );
   const liveDisabled = page !== 0 || liveUnavailable;
   const liveTitle = liveUnavailable
@@ -194,8 +221,13 @@ export default function App() {
       setError(null);
       try {
         const response = await listMessages(
-          { query: filter, hosts: selectedHosts, limit: calculatedLimit, offset },
-          signal
+          {
+            query: filter,
+            hosts: selectedHosts,
+            limit: calculatedLimit,
+            offset,
+          },
+          signal,
         );
         messagesRef.current = response.data;
         setMessages(response.data);
@@ -204,8 +236,8 @@ export default function App() {
           sortedUniqueHosts([
             ...current,
             ...selectedHosts,
-            ...response.data.map((message) => message.hostname ?? "")
-          ])
+            ...response.data.map((message) => message.hostname ?? ""),
+          ]),
         );
         setLastUpdated(new Date());
       } catch (err) {
@@ -217,7 +249,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [filter, offset, selectedHosts, calculatedLimit]
+    [filter, offset, selectedHosts, calculatedLimit],
   );
 
   useEffect(() => {
@@ -255,7 +287,9 @@ export default function App() {
         return;
       }
 
-      setKnownHosts((current) => sortedUniqueHosts([...current, message.hostname ?? ""]));
+      setKnownHosts((current) =>
+        sortedUniqueHosts([...current, message.hostname ?? ""]),
+      );
       setLastUpdated(new Date());
 
       if (!matchesVisibleFilters(message, filter, selectedHosts)) {
@@ -264,7 +298,7 @@ export default function App() {
 
       const merged = [
         message,
-        ...messagesRef.current.filter((existing) => existing.id !== message.id)
+        ...messagesRef.current.filter((existing) => existing.id !== message.id),
       ].sort(compareMessagesLatestFirst);
       const nextMessages = merged.slice(0, calculatedLimit);
       messagesRef.current = nextMessages;
@@ -276,7 +310,9 @@ export default function App() {
     const handleError = () => {
       setAutoRefresh(false);
       setLiveUnavailable(true);
-      setError("Live updates disabled because the SSE connection failed. Use Refresh for manual updates.");
+      setError(
+        "Live updates disabled because the SSE connection failed. Use Refresh for manual updates.",
+      );
       events.close();
     };
 
@@ -287,7 +323,14 @@ export default function App() {
       events.removeEventListener("error", handleError);
       events.close();
     };
-  }, [autoRefresh, filter, liveUnavailable, page, selectedHosts, calculatedLimit]);
+  }, [
+    autoRefresh,
+    filter,
+    liveUnavailable,
+    page,
+    selectedHosts,
+    calculatedLimit,
+  ]);
 
   const latestReceived = useMemo(() => {
     if (messages.length === 0) {
@@ -321,7 +364,9 @@ export default function App() {
       setNotice(null);
       try {
         const response = await importMessages(file);
-        setNotice(`Imported ${response.imported} messages, skipped ${response.skipped} blank lines`);
+        setNotice(
+          `Imported ${response.imported} messages, skipped ${response.skipped} blank lines`,
+        );
         if (page === 0) {
           void refresh();
         } else {
@@ -334,7 +379,7 @@ export default function App() {
         event.currentTarget.value = "";
       }
     },
-    [page, refresh]
+    [page, refresh],
   );
 
   const clearHosts = useCallback(() => {
@@ -357,7 +402,9 @@ export default function App() {
       return;
     }
     const body = `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`;
-    const blob = new Blob([body], { type: "application/x-ndjson;charset=utf-8" });
+    const blob = new Blob([body], {
+      type: "application/x-ndjson;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -424,7 +471,9 @@ export default function App() {
                 </label>
               ))}
 
-              {hostOptions.length === 0 && <div className="host-empty">No hosts</div>}
+              {hostOptions.length === 0 && (
+                <div className="host-empty">No hosts</div>
+              )}
             </div>
           )}
         </div>
@@ -515,7 +564,9 @@ export default function App() {
           >
             <ChevronRight size={18} />
           </button>
-          <span className="pager-separator" aria-hidden="true">|</span>
+          <span className="pager-separator" aria-hidden="true">
+            |
+          </span>
           <select
             className="page-size-select"
             value={pageSizeSetting}
@@ -558,7 +609,11 @@ export default function App() {
           title={liveTitle}
           aria-label={liveTitle}
         >
-          {autoRefresh && !liveDisabled ? <Pause size={18} /> : <Play size={18} />}
+          {autoRefresh && !liveDisabled ? (
+            <Pause size={18} />
+          ) : (
+            <Play size={18} />
+          )}
         </button>
       </section>
 
