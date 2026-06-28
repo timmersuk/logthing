@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"bufio"
 
 	goSyslog "gopkg.in/mcuadros/go-syslog.v2"
 	"gopkg.in/mcuadros/go-syslog.v2/format"
@@ -114,14 +115,32 @@ func (l *Listener) consume() {
 func setFormat(server *goSyslog.Server, format string) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "rfc3164":
-		server.SetFormat(goSyslog.RFC3164)
+		server.SetFormat(withLocalTime(goSyslog.RFC3164))
 	case "rfc6587":
-		server.SetFormat(goSyslog.RFC6587)
+		server.SetFormat(withLocalTime(goSyslog.RFC6587))
 	case "rfc5424":
-		server.SetFormat(goSyslog.RFC5424)
+		server.SetFormat(withLocalTime(goSyslog.RFC5424))
 	default:
-		server.SetFormat(goSyslog.Automatic)
+		server.SetFormat(withLocalTime(goSyslog.Automatic))
 	}
+}
+
+type localTimeFormat struct {
+	base format.Format
+}
+
+func (l *localTimeFormat) GetParser(line []byte) format.LogParser {
+	parser := l.base.GetParser(line)
+	parser.Location(time.Local)
+	return parser
+}
+
+func (l *localTimeFormat) GetSplitFunc() bufio.SplitFunc {
+	return l.base.GetSplitFunc()
+}
+
+func withLocalTime(f format.Format) format.Format {
+	return &localTimeFormat{base: f}
 }
 
 func transportName(cfg Config) string {
