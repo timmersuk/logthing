@@ -4,6 +4,7 @@ DATA_DIR ?= $(CURDIR)/logthing-data
 DOCKER ?= docker
 DOCKER_BUILDX ?= docker buildx
 VERSION ?= $(TAG)
+CURRENT_BRANCH := $(strip $(shell git branch --show-current))
 
 # Architectures we want binaries for.
 ARCHES := amd64 arm64
@@ -117,7 +118,12 @@ check-release-clean:
 	@git diff --cached --quiet || (echo "Worktree has staged changes"; exit 1)
 
 check-release-main:
-	@test "$$(git branch --show-current)" = "main" || (echo "Not on main"; exit 1)
+ifeq ($(CURRENT_BRANCH),main)
+	@echo "Branch is main"
+else
+	@echo "Not on main"
+	@exit 1
+endif
 
 release-tag: check-release-clean check-release-main
 	@test -n "$(TAG)" || (echo "Usage: make release-tag TAG=v0.1.2"; exit 1)
