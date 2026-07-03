@@ -27,6 +27,7 @@ import {
   listMessages,
   openMessageStream,
   sendTestEvent,
+  fetchBuildID,
 } from "./api";
 import type { SyslogMessage } from "./types";
 
@@ -138,6 +139,13 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [buildId, setBuildId] = useState<string>("");
+
+  useEffect(() => {
+    fetchBuildID()
+      .then(setBuildId)
+      .catch((err) => console.error("Failed to fetch build ID:", err));
+  }, []);
 
   const [pageSizeSetting, setPageSizeSetting] = useState<number | "auto">(
     () => {
@@ -423,6 +431,7 @@ export default function App() {
           <div>
             <h1>Logthing</h1>
             <p>{latestReceived || "No messages received"}</p>
+            {buildId && <p className="text-xs opacity-50">Build: {buildId}</p>}
           </div>
         </div>
         <div className="status-strip" aria-live="polite">

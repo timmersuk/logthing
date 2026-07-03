@@ -1,7 +1,6 @@
 .git
 .github
 .idea
-bin
 data
 frontend/node_modules
 frontend/.vite

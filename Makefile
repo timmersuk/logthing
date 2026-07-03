@@ -1,23 +1,75 @@
 IMAGE ?= timmersuk/logthing
 TAG ?= latest
 DATA_DIR ?= $(CURDIR)/logthing-data
-PLATFORMS ?= linux/amd64,linux/arm64
 DOCKER ?= docker
 DOCKER_BUILDX ?= docker buildx
 VERSION ?= $(TAG)
 
-.PHONY: frontend test build syslogsend docker-build docker-run docker-login docker-push docker-buildx-push compose-up compose-down check-release-clean check-release-main release-tag release-patch
+# Architectures we want binaries for.
+ARCHES := amd64 arm64
+OSES := linux windows
 
+# Build targets that run inside Docker containers – no pnpm or Go on host.
+.PHONY: frontend frontend-docker build-go-docker build-go-local test build syslogsend \
+        docker-build docker-run docker-login docker-push docker-buildx-push \
+        compose-up compose-down check-release-clean check-release-main \
+        release-tag release-patch build-all-arch
+
+# ------------------------------------------------------------------
+# 1️⃣ Build the frontend using a node container (pnpm is available there).
+# ------------------------------------------------------------------
+frontend-docker:
+	@echo "Building frontend with node:20-bookworm-slim…"
+	@docker run --rm -e CI=true \
+	    -v "$(CURDIR):/src" \
+	    -w /src/frontend \
+	    node:20-bookworm-slim \
+	    sh -c "make frontend"
+
+# ------------------------------------------------------------------
+# 2️⃣ Build the Go binaries using a golang container.
+# ------------------------------------------------------------------
+build-go-docker:
+	@echo "Building Go binaries for all supported architectures in Docker…"
+	docker run --rm \
+	            -v "$(CURDIR):/src" \
+	            -w /src \
+	            golang:1.26-bookworm \
+	            sh -c 'make build-go-local'; 
+
+# ------------------------------------------------------------------
+# 3️⃣ Public build targets that runs the frontend and Go builds in Docker containers, or locally.
+# ------------------------------------------------------------------
+build-docker: frontend-docker build-go-docker
+build: frontend build-go-local
+
+
+# ------------------------------------------------------------------
+# 4️⃣ Build the frontend locally.
+# ------------------------------------------------------------------
 frontend:
-	pnpm --dir frontend install --frozen-lockfile
-	pnpm --dir frontend build
+	@echo "Building frontend locally…"
+	@corepack enable && corepack prepare pnpm@10.23.0 --activate && pnpm --dir frontend install --frozen-lockfile && pnpm --dir frontend build
 
-test: frontend
+
+# ------------------------------------------------------------------
+# 5️⃣ Build the Go binaries for all supported architectures (cross‑compile) locally.
+# ------------------------------------------------------------------
+build-go-local: frontend
+	@echo "Building Go binaries for all supported architectures…"
+	@for os in $(OSES); do \
+	    for arch in $(ARCHES); do \
+	        mkdir -p bin/$$os/$$arch && \
+	        GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w -X main.BuildID=$(VERSION)" -o bin/$$os/$$arch/logthing ./cmd/server && \
+	        GOOS=$$os GOARCH=$$arch go build -trimpath -o bin/$$os/$$arch/syslogsend ./cmd/syslogsend; \
+	    done; \
+	done
+
+# ------------------------------------------------------------------
+# 5️⃣ Existing test target – still depends on local frontend files.
+# ------------------------------------------------------------------
+test: frontend-docker
 	go test ./...
-
-build: frontend
-	go build -trimpath -ldflags "-X main.BuildID=$(VERSION)" -o bin/logthing ./cmd/server
-	go build -trimpath -o bin/syslogsend ./cmd/syslogsend
 
 syslogsend:
 	go run ./cmd/syslogsend -network udp -addr 127.0.0.1:5514 -message "logthing Makefile test event"
@@ -41,6 +93,12 @@ docker-login:
 docker-push:
 	$(DOCKER) push $(IMAGE):$(TAG)
 
+comma := ,
+empty :=
+space := $(empty) $(empty)
+
+PLATFORMS := $(foreach os,$(OSES),$(foreach arch,$(ARCHES),$(os)/$(arch)))
+PLATFORMS := $(subst $(space),$(comma),$(PLATFORMS))
 docker-buildx-push:
 	$(DOCKER_BUILDX) build \
 		--platform $(PLATFORMS) \
