@@ -10,7 +10,7 @@ ARCHES := amd64 arm64
 OSES := linux windows
 
 # Build targets that run inside Docker containers – no pnpm or Go on host.
-.PHONY: frontend frontend-docker build-go-docker test build syslogsend \
+.PHONY: frontend-docker build-go-docker test build syslogsend \
         docker-build docker-run docker-login docker-push docker-buildx-push \
         compose-up compose-down check-release-clean check-release-main \
         release-tag release-patch build-all-arch
@@ -24,7 +24,7 @@ frontend-docker:
 	    -v "$(CURDIR):/src" \
 	    -w /src/frontend \
 	    node:20-bookworm-slim \
-	    sh -c "corepack enable && corepack prepare pnpm@10.23.0 --activate && pnpm install --frozen-lockfile && pnpm build"
+	    sh -c "make frontend"
 
 # ------------------------------------------------------------------
 # 2️⃣ Build the Go binaries using a golang container.
@@ -35,18 +35,27 @@ build-go-docker:
 	            -v "$(CURDIR):/src" \
 	            -w /src \
 	            golang:1.26-bookworm \
-	            sh -c 'make build-local'; 
+	            sh -c 'make build-go-local'; 
 
 # ------------------------------------------------------------------
-# 3️⃣ Public single‑arch build target.
+# 3️⃣ Public build targets that runs the frontend and Go builds in Docker containers, or locally.
 # ------------------------------------------------------------------
-build: frontend-docker build-go-docker
-frontend: frontend-docker
+build-docker: frontend-docker build-go-docker
+build: frontend build-go-local
+
 
 # ------------------------------------------------------------------
-# 4️⃣ Build all supported architectures (cross‑compile) locally.
+# 4️⃣ Build the frontend locally.
 # ------------------------------------------------------------------
-build-local:
+frontend:
+	@echo "Building frontend locally…"
+	@corepack enable && corepack prepare pnpm@10.23.0 --activate && pnpm install --frozen-lockfile && pnpm build
+
+
+# ------------------------------------------------------------------
+# 5️⃣ Build the Go binaries for all supported architectures (cross‑compile) locally.
+# ------------------------------------------------------------------
+build-go-local:
 	@echo "Building Go binaries for all supported architectures…"
 	@for os in $(OSES); do \
 	    for arch in $(ARCHES); do \
