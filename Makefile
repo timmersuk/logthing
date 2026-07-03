@@ -59,9 +59,9 @@ build-go-local: frontend
 	@echo "Building Go binaries for all supported architectures…"
 	@for os in $(OSES); do \
 	    for arch in $(ARCHES); do \
-	        mkdir -p bin/$$os-$$arch && \
-	        GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w -X main.BuildID=$(VERSION)" -o bin/$$os-$$arch/logthing ./cmd/server && \
-	        go build -trimpath -o bin/$$os-$$arch/syslogsend ./cmd/syslogsend; \
+	        mkdir -p bin/$$os/$$arch && \
+	        GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w -X main.BuildID=$(VERSION)" -o bin/$$os/$$arch/logthing ./cmd/server && \
+	        GOOS=$$os GOARCH=$$arch go build -trimpath -o bin/$$os/$$arch/syslogsend ./cmd/syslogsend; \
 	    done; \
 	done
 
