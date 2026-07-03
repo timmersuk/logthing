@@ -1,10 +1,8 @@
 IMAGE ?= timmersuk/logthing
-TAG ?= latest
+CI_BUILD_ID ?= local
 DATA_DIR ?= $(CURDIR)/logthing-data
 DOCKER ?= docker
 DOCKER_BUILDX ?= docker buildx
-VERSION ?= $(TAG)
-CURRENT_BRANCH := $(strip $(shell git branch --show-current))
 
 # Architectures we want binaries for.
 ARCHES := amd64 arm64
@@ -23,8 +21,8 @@ frontend-docker:
 	@echo "Building frontend with node:20-bookworm-slim…"
 	@docker run --rm -e CI=true \
 	    -v "$(CURDIR):/src" \
-	    -w /src/frontend \
-	    node:20-bookworm-slim \
+	    -w /src \
+	    node:20-bookworm \
 	    sh -c "make frontend"
 
 # ------------------------------------------------------------------
@@ -61,7 +59,7 @@ build-go-local: frontend
 	@for os in $(OSES); do \
 	    for arch in $(ARCHES); do \
 	        mkdir -p bin/$$os/$$arch && \
-	        GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w -X main.BuildID=$(VERSION)" -o bin/$$os/$$arch/logthing ./cmd/server && \
+	        GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w -X main.BuildID=$(CI_BUILD_ID)" -o bin/$$os/$$arch/logthing ./cmd/server && \
 	        GOOS=$$os GOARCH=$$arch go build -trimpath -o bin/$$os/$$arch/syslogsend ./cmd/syslogsend; \
 	    done; \
 	done
@@ -76,7 +74,7 @@ syslogsend:
 	go run ./cmd/syslogsend -network udp -addr 127.0.0.1:5514 -message "logthing Makefile test event"
 
 docker-build:
-	$(DOCKER) build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(TAG) .
+	$(DOCKER) build -t $(IMAGE):$(CI_BUILD_ID) .
 
 docker-run:
 	$(DOCKER) run --rm \
@@ -86,26 +84,8 @@ docker-run:
 		-v "$(DATA_DIR):/data" \
 		-e LOGTHING_USERNAME=admin \
 		-e LOGTHING_PASSWORD=secret \
-		$(IMAGE):$(TAG)
+		$(IMAGE):$(CI_BUILD_ID)
 
-docker-login:
-	$(DOCKER) login
-
-docker-push:
-	$(DOCKER) push $(IMAGE):$(TAG)
-
-comma := ,
-empty :=
-space := $(empty) $(empty)
-
-PLATFORMS := $(foreach os,$(OSES),$(foreach arch,$(ARCHES),$(os)/$(arch)))
-PLATFORMS := $(subst $(space),$(comma),$(PLATFORMS))
-docker-buildx-push:
-	$(DOCKER_BUILDX) build \
-		--platform $(PLATFORMS) \
-		--build-arg VERSION=$(VERSION) \
-		-t $(IMAGE):$(TAG) \
-		--push .
 
 compose-up:
 	$(DOCKER) compose up --build
@@ -118,19 +98,13 @@ check-release-clean:
 	@git diff --cached --quiet || (echo "Worktree has staged changes"; exit 1)
 
 check-release-main:
-ifeq ($(CURRENT_BRANCH),main)
+ifeq ($(strip $(shell git branch --show-current)),main)
 	@echo "Branch is main"
 else
 	@echo "Not on main"
 	@exit 1
 endif
 
-release-tag: check-release-clean check-release-main
-	@test -n "$(TAG)" || (echo "Usage: make release-tag TAG=v0.1.2"; exit 1)
-	git fetch --tags origin
-	git pull --ff-only origin main
-	git tag -a $(TAG) -m "$(TAG)"
-	git push origin $(TAG)
 
 release-patch: check-release-clean check-release-main
 	@git fetch --tags origin

@@ -71,6 +71,22 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set build ID
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "CI_BUILD_ID=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          else
+            short_sha=$(git rev-parse --short HEAD)
+            if [[ -n "$(git status --porcelain)" ]]; then
+              echo "CI_BUILD_ID=${short_sha}-dirty" >> "$GITHUB_ENV"
+            else
+              echo "CI_BUILD_ID=${short_sha}" >> "$GITHUB_ENV"
+            fi
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
