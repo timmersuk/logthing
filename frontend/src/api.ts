@@ -88,3 +88,16 @@ export async function importMessages(
 
   return response.json() as Promise<ImportMessagesResponse>;
 }
+
+export async function fetchBuildID(): Promise<string> {
+  const response = await fetch("/healthcheck", {
+    credentials: "same-origin"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch build ID: ${response.status}`);
+  }
+
+  const data = await response.json() as { build_id?: string };
+  return data.build_id || "Unknown";
+}

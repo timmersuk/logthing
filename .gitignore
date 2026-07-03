@@ -4,6 +4,7 @@ frontend/node_modules/
 frontend/.vite/
 frontend/.turbo/
 internal/web/dist/
+bin/
 # If you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
@@ -34,7 +35,6 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
-/.idea/
-.vscode/launch.json
+.idea/
+.vscode/
+.pnpm-store
