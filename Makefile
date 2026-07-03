@@ -10,7 +10,7 @@ ARCHES := amd64 arm64
 OSES := linux windows
 
 # Build targets that run inside Docker containers – no pnpm or Go on host.
-.PHONY: frontend-docker build-go-docker test build syslogsend \
+.PHONY: frontend frontend-docker build-go-docker build-go-local test build syslogsend \
         docker-build docker-run docker-login docker-push docker-buildx-push \
         compose-up compose-down check-release-clean check-release-main \
         release-tag release-patch build-all-arch
@@ -49,13 +49,13 @@ build: frontend build-go-local
 # ------------------------------------------------------------------
 frontend:
 	@echo "Building frontend locally…"
-	@corepack enable && corepack prepare pnpm@10.23.0 --activate && pnpm install --frozen-lockfile && pnpm build
+	@corepack enable && corepack prepare pnpm@10.23.0 --activate && pnpm --dir frontend install --frozen-lockfile && pnpm --dir frontend build
 
 
 # ------------------------------------------------------------------
 # 5️⃣ Build the Go binaries for all supported architectures (cross‑compile) locally.
 # ------------------------------------------------------------------
-build-go-local:
+build-go-local: frontend
 	@echo "Building Go binaries for all supported architectures…"
 	@for os in $(OSES); do \
 	    for arch in $(ARCHES); do \
