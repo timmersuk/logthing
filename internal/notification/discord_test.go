@@ -14,7 +14,7 @@ func TestDiscordNotifierSendsPortableNotification(t *testing.T) {
 	t.Parallel()
 
 	var payload map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("wait"); got != "true" {
 			t.Errorf("wait query = %q, want true", got)
 		}
@@ -26,7 +26,7 @@ func TestDiscordNotifierSendsPortableNotification(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notifier, err := NewDiscord(server.URL, time.Second)
+	notifier, err := newDiscord(server.URL, time.Second, server.Client())
 	if err != nil {
 		t.Fatalf("NewDiscord() error = %v", err)
 	}
@@ -64,11 +64,11 @@ func TestDiscordNotifierClassifiesRetryableAndPermanentFailures(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				http.Error(w, "failure", test.status)
 			}))
 			defer server.Close()
-			notifier, err := NewDiscord(server.URL, time.Second)
+			notifier, err := newDiscord(server.URL, time.Second, server.Client())
 			if err != nil {
 				t.Fatalf("NewDiscord() error = %v", err)
 			}
@@ -88,7 +88,7 @@ func TestDiscordNotifierDoesNotLeakWebhookURL(t *testing.T) {
 	t.Parallel()
 
 	secret := "secret-webhook-token"
-	notifier, err := NewDiscord("http://127.0.0.1:1/"+secret, 50*time.Millisecond)
+	notifier, err := NewDiscord("https://127.0.0.1:1/"+secret, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("NewDiscord() error = %v", err)
 	}
@@ -98,5 +98,12 @@ func TestDiscordNotifierDoesNotLeakWebhookURL(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("error leaked webhook secret: %v", err)
+	}
+}
+
+func TestDiscordNotifierRejectsUnencryptedWebhook(t *testing.T) {
+	t.Parallel()
+	if _, err := NewDiscord("http://discord.example/api/webhooks/token", time.Second); err == nil {
+		t.Fatal("NewDiscord() error = nil, want HTTPS validation error")
 	}
 }

@@ -22,17 +22,23 @@ type DiscordNotifier struct {
 }
 
 func NewDiscord(webhookURL string, timeout time.Duration) (*DiscordNotifier, error) {
+	return newDiscord(webhookURL, timeout, http.DefaultClient)
+}
+
+func newDiscord(webhookURL string, timeout time.Duration, client *http.Client) (*DiscordNotifier, error) {
 	parsed, err := url.Parse(strings.TrimSpace(webhookURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, errors.New("Discord webhook URL is invalid")
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return nil, errors.New("Discord webhook URL must use HTTP or HTTPS")
+	if parsed.Scheme != "https" {
+		return nil, errors.New("Discord webhook URL must use HTTPS")
 	}
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	return &DiscordNotifier{webhook: parsed, client: &http.Client{Timeout: timeout}}, nil
+	configuredClient := *client
+	configuredClient.Timeout = timeout
+	return &DiscordNotifier{webhook: parsed, client: &configuredClient}, nil
 }
 
 func (n *DiscordNotifier) Send(ctx context.Context, message Notification) (Receipt, error) {
