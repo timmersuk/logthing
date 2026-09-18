@@ -111,8 +111,9 @@ async function checkedJSON<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function listIncidents(signal?: AbortSignal): Promise<IncidentsResponse> {
-  return checkedJSON<IncidentsResponse>(await fetch("/api/v1/incidents?limit=100", {
+export async function listIncidents(state: "pending_failure" | "active" | "resolved", signal?: AbortSignal): Promise<IncidentsResponse> {
+  const query = new URLSearchParams({ state, limit: "100" });
+  return checkedJSON<IncidentsResponse>(await fetch(`/api/v1/incidents?${query}`, {
     signal,
     credentials: "same-origin"
   }));

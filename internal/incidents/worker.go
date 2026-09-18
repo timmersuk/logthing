@@ -16,7 +16,7 @@ import (
 )
 
 type RecordReader interface {
-	VisitAfter(context.Context, map[string]int64, func(storage.StoredRecord) error) (map[string]int64, error)
+	VisitAfter(context.Context, map[string]storage.Cursor, func(storage.StoredRecord) error) (map[string]storage.Cursor, error)
 }
 
 type WorkerHealth struct {
@@ -99,14 +99,29 @@ func (w *Worker) reconcile(ctx context.Context, now time.Time) error {
 	w.runMu.Lock()
 	defer w.runMu.Unlock()
 	cursors := w.engine.Cursors()
+	bootstrapped := w.engine.Bootstrapped()
+	lastCheckpointAt := w.engine.LastCheckpointAt()
 	var lastProcessed *time.Time
 	var records []storage.StoredRecord
+	rebuilding := false
+	changedFile := ""
 	next, err := w.reader.VisitAfter(ctx, cursors, func(record storage.StoredRecord) error {
 		if _, supported := classify(record.Message, w.engine.cfg.Interface); supported {
 			records = append(records, record)
 		}
 		return nil
 	})
+	if file, changed := storage.PartitionChangedFile(err); changed {
+		rebuilding = true
+		changedFile = file
+		records = nil
+		next, err = w.reader.VisitAfter(ctx, nil, func(record storage.StoredRecord) error {
+			if _, supported := classify(record.Message, w.engine.cfg.Interface); supported {
+				records = append(records, record)
+			}
+			return nil
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("reconcile incidents: %w", err)
 	}
@@ -122,8 +137,17 @@ func (w *Worker) reconcile(ctx context.Context, now time.Time) error {
 	observations := make([]Observation, 0, len(records))
 	for _, record := range records {
 		message := record.Message
+		eligible := message.Transport != "import" && (bootstrapped || message.ReceivedAt.After(w.startedAt))
+		if rebuilding {
+			previous, existed := cursors[record.File]
+			if record.File == changedFile {
+				eligible = eligible && !lastCheckpointAt.IsZero() && message.ReceivedAt.After(lastCheckpointAt)
+			} else {
+				eligible = eligible && (!existed || record.Offset > previous.Offset)
+			}
+		}
 		observations = append(observations, Observation{
-			Message: message, NotifyEligible: message.Transport != "import" && message.ReceivedAt.After(w.startedAt),
+			Message: message, NotifyEligible: eligible,
 			SourceRef: fmt.Sprintf("%s:%d", record.File, record.Offset),
 		})
 		processed := message.ReceivedAt.UTC()
@@ -131,8 +155,14 @@ func (w *Worker) reconcile(ctx context.Context, now time.Time) error {
 			lastProcessed = &processed
 		}
 	}
-	if err := w.engine.Apply(ctx, observations, next); err != nil {
-		return fmt.Errorf("apply incident evidence: %w", err)
+	var applyErr error
+	if rebuilding {
+		applyErr = w.engine.Rebuild(ctx, observations, next, now)
+	} else {
+		applyErr = w.engine.Apply(ctx, observations, next, now)
+	}
+	if applyErr != nil {
+		return fmt.Errorf("apply incident evidence: %w", applyErr)
 	}
 	if err := w.engine.Tick(ctx, now); err != nil {
 		return fmt.Errorf("advance incidents: %w", err)
@@ -209,7 +239,7 @@ func (w *Worker) SendTest(ctx context.Context) (notification.Receipt, error) {
 		Kind:       notification.KindTest,
 		Severity:   "info",
 		Title:      "Logthing test notification",
-		Body:       "Discord notifications are configured correctly.",
+		Body:       "Logthing notifications are configured correctly.",
 		OccurredAt: time.Now().UTC(),
 	})
 }

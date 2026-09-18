@@ -16,7 +16,9 @@ func TestEngineRequiresSustainedFailureAndRecovery(t *testing.T) {
 
 	observe(t, engine, wanMessage("router-a", "offline", start, "down-1"), true)
 	engine.Tick(context.Background(), start.Add(59*time.Second))
-	assertIncidentCount(t, engine, 0)
+	if pending := singleIncident(t, engine); pending.State != StatePendingFailure {
+		t.Fatalf("state = %q, want %q", pending.State, StatePendingFailure)
+	}
 
 	engine.Tick(context.Background(), start.Add(time.Minute))
 	active := singleIncident(t, engine)

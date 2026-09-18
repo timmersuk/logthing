@@ -399,7 +399,7 @@
         "summary": "List primary-WAN incidents",
         "security": [{"basicAuth": []}],
         "parameters": [
-          {"name": "state", "in": "query", "schema": {"type": "string", "enum": ["active", "resolved"]}},
+          {"name": "state", "in": "query", "schema": {"type": "string", "enum": ["pending_failure", "active", "resolved"]}},
           {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}},
           {"name": "offset", "in": "query", "schema": {"type": "integer", "minimum": 0, "default": 0}}
         ],
@@ -479,13 +479,13 @@
       },
       "Incident": {
         "type": "object",
-        "required": ["id", "rule_version", "hostname", "interface", "state", "started_at", "activated_at", "evidence_ids", "deliveries"],
+        "required": ["id", "rule_version", "hostname", "interface", "state", "started_at", "evidence_ids", "deliveries"],
         "properties": {
           "id": {"type": "string"},
           "rule_version": {"type": "integer", "example": 1},
           "hostname": {"type": "string"},
           "interface": {"type": "string", "example": "wan"},
-          "state": {"type": "string", "enum": ["active", "pending_recovery", "resolved"]},
+          "state": {"type": "string", "enum": ["pending_failure", "active", "pending_recovery", "resolved"]},
           "started_at": {"type": "string", "format": "date-time"},
           "activated_at": {"type": "string", "format": "date-time"},
           "recovery_first_at": {"type": "string", "format": "date-time"},

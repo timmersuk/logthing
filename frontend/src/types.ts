@@ -48,9 +48,9 @@ export interface Incident {
   rule_version: number;
   hostname: string;
   interface: string;
-  state: "active" | "pending_recovery" | "resolved";
+  state: "pending_failure" | "active" | "pending_recovery" | "resolved";
   started_at: string;
-  activated_at: string;
+  activated_at?: string;
   recovery_first_at?: string;
   resolved_at?: string;
   last_evidence_at: string;

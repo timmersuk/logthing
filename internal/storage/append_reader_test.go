@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,8 +85,90 @@ func TestFileStoreVisitAfterLeavesPartialLinePending(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("visited %d records, want 0", count)
 	}
-	if got := cursors[filepath.ToSlash(filepath.Join("2026", "09", "18", "router.ndjson"))]; got != 0 {
+	if got := cursors[filepath.ToSlash(filepath.Join("2026", "09", "18", "router.ndjson"))].Offset; got != 0 {
 		t.Fatalf("cursor = %d, want 0", got)
+	}
+}
+
+func TestFileStoreVisitAfterDetectsReplacement(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	if err := store.Append(context.Background(), model.Message{ID: "original", ReceivedAt: received}); err != nil {
+		t.Fatal(err)
+	}
+	cursors, err := store.VisitAfter(context.Background(), nil, func(StoredRecord) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "2026", "09", "18", "unknown.ndjson")
+	replacement := []byte(`{"id":"replacement","received_at":"2026-09-18T12:00:00Z","message":"` + strings.Repeat("x", 512) + `"}` + "\n")
+	if err := os.WriteFile(path, replacement, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.VisitAfter(context.Background(), cursors, func(StoredRecord) error { return nil })
+	if !IsPartitionChanged(err) {
+		t.Fatalf("error = %v, want partition changed", err)
+	}
+}
+
+func TestFileStoreVisitAfterDetectsReplacementBeyondSharedPrefix(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	message := model.Message{ID: "original", ReceivedAt: received, Hostname: "router-a", Message: strings.Repeat("x", 6000)}
+	if err := store.Append(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	cursors, err := store.VisitAfter(context.Background(), nil, func(StoredRecord) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "2026", "09", "18", "router-a.ndjson")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-3] = 'y'
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.VisitAfter(context.Background(), cursors, func(StoredRecord) error { return nil })
+	if !IsPartitionChanged(err) {
+		t.Fatalf("error = %v, want partition changed", err)
+	}
+}
+
+func TestFileStoreVisitAfterDetectsDeletedPartition(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	if err := store.Append(context.Background(), model.Message{ID: "original", ReceivedAt: received, Hostname: "router-a"}); err != nil {
+		t.Fatal(err)
+	}
+	cursors, err := store.VisitAfter(context.Background(), nil, func(StoredRecord) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "2026", "09", "18", "router-a.ndjson")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.VisitAfter(context.Background(), cursors, func(StoredRecord) error { return nil })
+	if !IsPartitionChanged(err) {
+		t.Fatalf("error = %v, want partition changed", err)
 	}
 }
 

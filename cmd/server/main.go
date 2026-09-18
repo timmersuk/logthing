@@ -88,7 +88,6 @@ func run() error {
 		BuildID:        BuildID,
 		Incidents:      incidentEngine,
 		IncidentWorker: incidentWorker,
-		PublicURL:      cfg.PublicURL,
 	})
 	if err != nil {
 		return err
@@ -154,7 +153,7 @@ func (publishers multiPublisher) Publish(message model.Message) {
 
 func newNotifier(cfg config.Config) (notification.Notifier, error) {
 	switch cfg.Notifier {
-	case "discord":
+	case config.NotifierDiscord:
 		return notification.NewDiscord(cfg.DiscordWebhookURL, 5*time.Second)
 	default:
 		return notification.DiscardNotifier{}, nil

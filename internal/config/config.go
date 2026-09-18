@@ -11,6 +11,13 @@ import (
 	sysloglistener "github.com/timmersuk/logthing/internal/syslog"
 )
 
+type NotifierKind string
+
+const (
+	NotifierNone    NotifierKind = "none"
+	NotifierDiscord NotifierKind = "discord"
+)
+
 type Config struct {
 	HTTPAddr          string
 	SyslogUDPAddr     string
@@ -25,7 +32,7 @@ type Config struct {
 	WANInterface      string
 	WANDownAfter      time.Duration
 	WANRecoveredAfter time.Duration
-	Notifier          string
+	Notifier          NotifierKind
 	DiscordWebhookURL string
 	PublicURL         string
 }
@@ -59,7 +66,7 @@ func FromEnv() (Config, error) {
 		WANInterface:      envDefault("LOGTHING_WAN_INTERFACE", "wan"),
 		WANDownAfter:      downAfter,
 		WANRecoveredAfter: recoveredAfter,
-		Notifier:          strings.ToLower(envDefault("LOGTHING_NOTIFIER", "none")),
+		Notifier:          NotifierKind(strings.ToLower(envDefault("LOGTHING_NOTIFIER", string(NotifierNone)))),
 		DiscordWebhookURL: strings.TrimSpace(os.Getenv("LOGTHING_DISCORD_WEBHOOK_URL")),
 		PublicURL:         strings.TrimRight(strings.TrimSpace(os.Getenv("LOGTHING_PUBLIC_URL")), "/"),
 	}
@@ -77,13 +84,13 @@ func FromEnv() (Config, error) {
 		return Config{}, errors.New("LOGTHING_STATE_DIR is required")
 	}
 	switch cfg.Notifier {
-	case "none":
-	case "discord":
+	case NotifierNone:
+	case NotifierDiscord:
 		if cfg.DiscordWebhookURL == "" {
 			return Config{}, errors.New("LOGTHING_DISCORD_WEBHOOK_URL is required when LOGTHING_NOTIFIER=discord")
 		}
 	default:
-		return Config{}, fmt.Errorf("unsupported LOGTHING_NOTIFIER %q", cfg.Notifier)
+		return Config{}, fmt.Errorf("unsupported LOGTHING_NOTIFIER %q", string(cfg.Notifier))
 	}
 
 	return cfg, nil

@@ -55,3 +55,38 @@ func TestFilePersistenceMissingFileLoadsEmptyState(t *testing.T) {
 		t.Fatalf("version = %d, want empty state", state.Version)
 	}
 }
+
+func TestFilePersistenceRestoresPendingFailureAndActiveRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "incidents.json")
+	persistence := NewFilePersistence(path)
+	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	cfg := Config{DownAfter: time.Minute, RecoveredAfter: time.Minute}
+	pending, _ := New(cfg, persistence)
+	observe(t, pending, wanMessage("router-a", "offline", start, "down"), true)
+	restoredPending, _ := New(cfg, persistence)
+	if err := restoredPending.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := singleIncident(t, restoredPending).State; got != StatePendingFailure {
+		t.Fatalf("state = %q", got)
+	}
+	if err := restoredPending.Tick(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	job := restoredPending.PendingNotifications()[0]
+	retryAt := start.Add(3 * time.Minute)
+	if err := restoredPending.MarkNotificationFailed(context.Background(), job.ID, "temporary", retryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	restoredActive, _ := New(cfg, persistence)
+	if err := restoredActive.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := singleIncident(t, restoredActive).State; got != StateActive {
+		t.Fatalf("state = %q", got)
+	}
+	jobs := restoredActive.PendingNotifications()
+	if len(jobs) != 1 || jobs[0].Attempts != 1 || !jobs[0].NextAt.Equal(retryAt) {
+		t.Fatalf("restored jobs = %#v", jobs)
+	}
+}

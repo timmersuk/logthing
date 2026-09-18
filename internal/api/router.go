@@ -37,7 +37,6 @@ type Config struct {
 	BuildID        string
 	Incidents      *incidents.Service
 	IncidentWorker *incidents.Worker
-	PublicURL      string
 }
 
 type TestEventSender func(context.Context, string) (TestEventResult, error)
@@ -63,7 +62,6 @@ type server struct {
 	buildID        string
 	incidents      *incidents.Service
 	incidentWorker *incidents.Worker
-	publicURL      string
 }
 
 type errorResponse struct {
@@ -134,7 +132,6 @@ func NewRouter(cfg Config) (http.Handler, error) {
 		buildID:        cfg.BuildID,
 		incidents:      cfg.Incidents,
 		incidentWorker: cfg.IncidentWorker,
-		publicURL:      cfg.PublicURL,
 	}
 
 	apiMux := http.NewServeMux()
@@ -179,14 +176,17 @@ func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
-	if state != "" && state != "active" && state != "resolved" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "state must be active or resolved"})
+	if state != "" && state != "pending_failure" && state != "active" && state != "resolved" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "state must be pending_failure, active, or resolved"})
 		return
 	}
 	all := s.incidents.List(incidents.Query{})
 	filtered := make([]incidents.Incident, 0, len(all))
 	for _, incident := range all {
 		active := incident.State == incidents.StateActive || incident.State == incidents.StatePendingRecovery
+		if state == "pending_failure" && incident.State != incidents.StatePendingFailure {
+			continue
+		}
 		if state == "active" && !active {
 			continue
 		}

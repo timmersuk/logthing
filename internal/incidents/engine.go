@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/timmersuk/logthing/internal/model"
+	"github.com/timmersuk/logthing/internal/storage"
 )
 
 type State string
 
 const (
+	StatePendingFailure  State = "pending_failure"
 	StateActive          State = "active"
 	StatePendingRecovery State = "pending_recovery"
 	StateResolved        State = "resolved"
@@ -48,7 +50,7 @@ type Incident struct {
 	Interface       string        `json:"interface"`
 	State           State         `json:"state"`
 	StartedAt       time.Time     `json:"started_at"`
-	ActivatedAt     time.Time     `json:"activated_at"`
+	ActivatedAt     *time.Time    `json:"activated_at,omitempty"`
 	RecoveryFirstAt *time.Time    `json:"recovery_first_at,omitempty"`
 	ResolvedAt      *time.Time    `json:"resolved_at,omitempty"`
 	LastEvidenceAt  time.Time     `json:"last_evidence_at"`
@@ -113,11 +115,13 @@ type tracker struct {
 }
 
 type Snapshot struct {
-	Version   int                        `json:"version"`
-	Trackers  map[string]tracker         `json:"trackers"`
-	Incidents map[string]Incident        `json:"incidents"`
-	Jobs      map[string]NotificationJob `json:"jobs"`
-	Cursors   map[string]int64           `json:"cursors,omitempty"`
+	Version          int                        `json:"version"`
+	Bootstrapped     bool                       `json:"bootstrapped"`
+	LastCheckpointAt time.Time                  `json:"last_checkpoint_at,omitempty"`
+	Trackers         map[string]tracker         `json:"trackers"`
+	Incidents        map[string]Incident        `json:"incidents"`
+	Jobs             map[string]NotificationJob `json:"jobs"`
+	Cursors          map[string]storage.Cursor  `json:"cursors,omitempty"`
 }
 
 type Persistence interface {
@@ -147,7 +151,7 @@ func New(cfg Config, persistence Persistence) (*Service, error) {
 		Trackers:  make(map[string]tracker),
 		Incidents: make(map[string]Incident),
 		Jobs:      make(map[string]NotificationJob),
-		Cursors:   make(map[string]int64),
+		Cursors:   make(map[string]storage.Cursor),
 	}
 	return &Service{cfg: cfg, persistence: persistence, state: state}, nil
 }
@@ -183,17 +187,65 @@ func (s *Service) Observe(ctx context.Context, message model.Message, notifyElig
 // Apply checkpoints evidence-derived state, outbox jobs, and source cursors in
 // one durable snapshot. Replayed records are harmless, but a checkpoint should
 // never claim source progress that its derived state does not contain.
-func (s *Service) Apply(ctx context.Context, observations []Observation, cursors map[string]int64) error {
+func (s *Service) Apply(ctx context.Context, observations []Observation, cursors map[string]storage.Cursor, checkpointAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, observation := range observations {
 		s.observeLocked(observation.Message, observation.NotifyEligible, observation.SourceRef)
 	}
-	s.state.Cursors = make(map[string]int64, len(cursors))
-	for path, offset := range cursors {
-		s.state.Cursors[path] = offset
+	s.state.Cursors = cloneCursors(cursors)
+	s.state.Bootstrapped = true
+	s.state.LastCheckpointAt = checkpointAt.UTC()
+	return s.saveLocked(ctx)
+}
+
+func (s *Service) Rebuild(ctx context.Context, observations []Observation, cursors map[string]storage.Cursor, checkpointAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.state
+	s.state = Snapshot{Version: 1, Bootstrapped: true, LastCheckpointAt: checkpointAt.UTC(), Trackers: map[string]tracker{}, Incidents: map[string]Incident{}, Jobs: map[string]NotificationJob{}, Cursors: cloneCursors(cursors)}
+	for _, observation := range observations {
+		s.observeLocked(observation.Message, observation.NotifyEligible, observation.SourceRef)
+	}
+	for key, incident := range s.state.Incidents {
+		if old, exists := previous.Incidents[key]; exists {
+			incident.Notify = incident.Notify || old.Notify
+			s.state.Incidents[key] = incident
+		}
+	}
+	for key, current := range s.state.Trackers {
+		if incident, exists := s.state.Incidents[current.IncidentID]; exists {
+			current.Notify = incident.Notify
+			s.state.Trackers[key] = current
+		}
+	}
+	for id, job := range previous.Jobs {
+		if _, exists := s.state.Incidents[job.IncidentID]; exists {
+			s.state.Jobs[id] = job
+		}
+	}
+	for _, incident := range s.state.Incidents {
+		if !incident.Notify || incident.ActivatedAt == nil {
+			continue
+		}
+		s.enqueueLocked(incident.ID, NotificationOpened, *incident.ActivatedAt)
+		if incident.State == StateResolved && incident.ResolvedAt != nil {
+			s.enqueueLocked(incident.ID, NotificationResolved, *incident.ResolvedAt)
+		}
 	}
 	return s.saveLocked(ctx)
+}
+
+func (s *Service) Bootstrapped() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Bootstrapped
+}
+
+func (s *Service) LastCheckpointAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.LastCheckpointAt
 }
 
 func (s *Service) observeLocked(message model.Message, notifyEligible bool, sourceRef string) {
@@ -215,16 +267,31 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 	case false:
 		switch current.Phase {
 		case "", phaseHealthy:
+			id := incidentID(evidence.hostname, evidence.iface, evidence.at, evidence.messageID)
 			current = tracker{
 				Phase:          phasePendingFailure,
 				PendingSince:   evidence.at,
 				LastEvidenceAt: evidence.at,
 				StartMessageID: evidence.messageID,
 				StartSourceRef: evidence.sourceRef,
+				IncidentID:     id,
 				Notify:         notifyEligible,
+			}
+			s.state.Incidents[id] = Incident{
+				ID: id, RuleVersion: 1, Hostname: evidence.hostname, Interface: evidence.iface,
+				State: StatePendingFailure, StartedAt: evidence.at, LastEvidenceAt: evidence.at,
+				EvidenceIDs: appendEvidence(nil, evidence.messageID), EvidenceRefs: appendEvidence(nil, evidence.sourceRef),
+				DownAfter: s.cfg.DownAfter, RecoveredAfter: s.cfg.RecoveredAfter, Notify: notifyEligible,
 			}
 		case phasePendingFailure:
 			current.Notify = current.Notify || notifyEligible
+			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
+				incident.Notify = current.Notify
+				incident.LastEvidenceAt = evidence.at
+				incident.EvidenceIDs = appendEvidence(incident.EvidenceIDs, evidence.messageID)
+				incident.EvidenceRefs = appendEvidence(incident.EvidenceRefs, evidence.sourceRef)
+				s.state.Incidents[incident.ID] = incident
+			}
 		case phasePendingRecovery:
 			current.Phase = phaseActive
 			current.RecoverySince = time.Time{}
@@ -249,6 +316,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 		case "":
 			current = tracker{Phase: phaseHealthy, LastEvidenceAt: evidence.at}
 		case phasePendingFailure:
+			delete(s.state.Incidents, current.IncidentID)
 			current = tracker{Phase: phaseHealthy, LastEvidenceAt: evidence.at}
 		case phaseActive:
 			current.Phase = phasePendingRecovery
@@ -287,35 +355,24 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error {
 func (s *Service) advanceLocked(now time.Time) bool {
 	changed := false
 	for key, current := range s.state.Trackers {
-		hostname, iface, _ := strings.Cut(key, "\x00")
 		switch current.Phase {
 		case phasePendingFailure:
 			if now.Sub(current.PendingSince) < s.cfg.DownAfter {
 				continue
 			}
 			activated := current.PendingSince.Add(s.cfg.DownAfter)
-			id := incidentID(hostname, iface, current.PendingSince, current.StartMessageID)
-			incident := Incident{
-				ID:             id,
-				RuleVersion:    1,
-				Hostname:       hostname,
-				Interface:      iface,
-				State:          StateActive,
-				StartedAt:      current.PendingSince,
-				ActivatedAt:    activated,
-				LastEvidenceAt: current.LastEvidenceAt,
-				EvidenceIDs:    appendEvidence(nil, current.StartMessageID),
-				EvidenceRefs:   appendEvidence(nil, current.StartSourceRef),
-				DownAfter:      s.cfg.DownAfter,
-				RecoveredAfter: s.cfg.RecoveredAfter,
-				Notify:         current.Notify,
+			incident, exists := s.state.Incidents[current.IncidentID]
+			if !exists {
+				continue
 			}
-			s.state.Incidents[id] = incident
+			incident.State = StateActive
+			incident.ActivatedAt = &activated
+			incident.Notify = current.Notify
+			s.state.Incidents[incident.ID] = incident
 			current.Phase = phaseActive
-			current.IncidentID = id
 			s.state.Trackers[key] = current
 			if incident.Notify {
-				s.enqueueLocked(id, NotificationOpened, activated)
+				s.enqueueLocked(incident.ID, NotificationOpened, activated)
 			}
 			changed = true
 		case phasePendingRecovery:
@@ -443,23 +500,16 @@ func (s *Service) MarkNotificationFailed(ctx context.Context, id, message string
 	return s.saveLocked(ctx)
 }
 
-func (s *Service) Cursors() map[string]int64 {
+func (s *Service) Cursors() map[string]storage.Cursor {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	cursors := make(map[string]int64, len(s.state.Cursors))
-	for path, offset := range s.state.Cursors {
-		cursors[path] = offset
-	}
-	return cursors
+	return cloneCursors(s.state.Cursors)
 }
 
-func (s *Service) SetCursors(ctx context.Context, cursors map[string]int64) error {
+func (s *Service) SetCursors(ctx context.Context, cursors map[string]storage.Cursor) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Cursors = make(map[string]int64, len(cursors))
-	for path, offset := range cursors {
-		s.state.Cursors[path] = offset
-	}
+	s.state.Cursors = cloneCursors(cursors)
 	return s.saveLocked(ctx)
 }
 
@@ -552,16 +602,31 @@ func appendEvidence(ids []string, id string) []string {
 
 func cloneIncident(incident Incident) Incident {
 	incident.EvidenceIDs = append([]string(nil), incident.EvidenceIDs...)
+	incident.EvidenceRefs = append([]string(nil), incident.EvidenceRefs...)
+	if incident.ActivatedAt != nil {
+		value := *incident.ActivatedAt
+		incident.ActivatedAt = &value
+	}
+	if incident.RecoveryFirstAt != nil {
+		value := *incident.RecoveryFirstAt
+		incident.RecoveryFirstAt = &value
+	}
+	if incident.ResolvedAt != nil {
+		value := *incident.ResolvedAt
+		incident.ResolvedAt = &value
+	}
 	return incident
 }
 
 func cloneSnapshot(state Snapshot) Snapshot {
 	clone := Snapshot{
-		Version:   state.Version,
-		Trackers:  make(map[string]tracker, len(state.Trackers)),
-		Incidents: make(map[string]Incident, len(state.Incidents)),
-		Jobs:      make(map[string]NotificationJob, len(state.Jobs)),
-		Cursors:   make(map[string]int64, len(state.Cursors)),
+		Version:          state.Version,
+		Bootstrapped:     state.Bootstrapped,
+		LastCheckpointAt: state.LastCheckpointAt,
+		Trackers:         make(map[string]tracker, len(state.Trackers)),
+		Incidents:        make(map[string]Incident, len(state.Incidents)),
+		Jobs:             make(map[string]NotificationJob, len(state.Jobs)),
+		Cursors:          make(map[string]storage.Cursor, len(state.Cursors)),
 	}
 	for key, value := range state.Trackers {
 		clone.Trackers[key] = value
@@ -592,6 +657,14 @@ func initializeSnapshot(state *Snapshot) {
 		state.Jobs = make(map[string]NotificationJob)
 	}
 	if state.Cursors == nil {
-		state.Cursors = make(map[string]int64)
+		state.Cursors = make(map[string]storage.Cursor)
 	}
+}
+
+func cloneCursors(cursors map[string]storage.Cursor) map[string]storage.Cursor {
+	clone := make(map[string]storage.Cursor, len(cursors))
+	for path, cursor := range cursors {
+		clone[path] = cursor
+	}
+	return clone
 }

@@ -123,11 +123,13 @@ export default function App() {
 
   const refreshIncidents = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [response, health] = await Promise.all([
-        listIncidents(signal),
+      const [pending, active, resolved, health] = await Promise.all([
+        listIncidents("pending_failure", signal),
+        listIncidents("active", signal),
+        listIncidents("resolved", signal),
         getIncidentHealth(signal),
       ]);
-      setIncidents(response.data);
+      setIncidents([...pending.data, ...active.data, ...resolved.data]);
       setIncidentHealth(health);
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
@@ -375,7 +377,8 @@ export default function App() {
     }
   }, []);
 
-  const activeIncidents = incidents.filter((incident) => incident.state !== "resolved");
+  const pendingIncidents = incidents.filter((incident) => incident.state === "pending_failure");
+  const activeIncidents = incidents.filter((incident) => incident.state === "active" || incident.state === "pending_recovery");
   const resolvedIncidents = incidents.filter((incident) => incident.state === "resolved");
 
   const handleImportFile = useCallback(
@@ -669,8 +672,11 @@ export default function App() {
         ) : (
           <div className="active-clear">No active primary WAN incidents</div>
         )}
+        {pendingIncidents.length > 0 && (
+          <div className="pending-alert">{pendingIncidents.length} primary WAN {pendingIncidents.length === 1 ? "failure is" : "failures are"} being confirmed</div>
+        )}
         <div className="incident-list">
-          {[...activeIncidents, ...resolvedIncidents.slice(0, 10)].map((incident) => (
+          {[...activeIncidents, ...pendingIncidents, ...resolvedIncidents.slice(0, 10)].map((incident) => (
             <article className={`incident-card ${incident.state}`} key={incident.id}>
               <div>
                 <strong>{incident.hostname} · {incident.interface}</strong>
@@ -678,7 +684,7 @@ export default function App() {
               </div>
               <div className="incident-times">
                 <span>Started {formatDate(incident.started_at)}</span>
-                <span>Activated {formatDate(incident.activated_at)}</span>
+                {incident.activated_at && <span>Activated {formatDate(incident.activated_at)}</span>}
                 {incident.resolved_at && <span>Recovered {formatDate(incident.resolved_at)}</span>}
                 <span>Duration {durationBetween(incident.started_at, incident.resolved_at)}</span>
                 <span>{deliveryLabel(incident)}</span>
