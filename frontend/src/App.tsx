@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ArrowLeft,
   Bell,
   CircleAlert,
   Database,
@@ -113,7 +114,21 @@ export default function App() {
   const [buildId, setBuildId] = useState<string>("");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [incidentHealth, setIncidentHealth] = useState<IncidentHealth | null>(null);
+  const [incidentLoadError, setIncidentLoadError] = useState<string | null>(null);
   const [sendingNotification, setSendingNotification] = useState(false);
+  const [notificationResult, setNotificationResult] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [route, setRoute] = useState(() => window.location.pathname);
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(window.location.pathname);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const navigate = useCallback((path: string) => {
+    window.history.pushState({}, "", path);
+    setRoute(path);
+  }, []);
 
   useEffect(() => {
     fetchBuildID()
@@ -131,9 +146,10 @@ export default function App() {
       ]);
       setIncidents([...pending.data, ...active.data, ...resolved.data]);
       setIncidentHealth(health);
+      setIncidentLoadError(null);
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
-        setError(err instanceof Error ? err.message : "Incident refresh failed");
+        setIncidentLoadError(err instanceof Error ? err.message : "Incident refresh failed");
       }
     }
   }, []);
@@ -365,13 +381,15 @@ export default function App() {
 
   const handleTestNotification = useCallback(async () => {
     setSendingNotification(true);
-    setError(null);
-    setNotice(null);
+    setNotificationResult(null);
     try {
       await sendTestNotification();
-      setNotice("Test notification sent");
+      setNotificationResult({ kind: "success", message: "Test notification sent." });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Test notification failed");
+      setNotificationResult({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Test notification failed",
+      });
     } finally {
       setSendingNotification(false);
     }
@@ -380,6 +398,8 @@ export default function App() {
   const pendingIncidents = incidents.filter((incident) => incident.state === "pending_failure");
   const activeIncidents = incidents.filter((incident) => incident.state === "active" || incident.state === "pending_recovery");
   const resolvedIncidents = incidents.filter((incident) => incident.state === "resolved");
+  const currentIncidents = [...activeIncidents, ...pendingIncidents];
+  const showingIncidents = route === "/incidents";
 
   const handleImportFile = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -456,6 +476,10 @@ export default function App() {
           </div>
         </div>
         <div className="status-strip" aria-live="polite">
+          <nav className="primary-nav" aria-label="Primary navigation">
+            <button className={!showingIncidents ? "active" : ""} type="button" onClick={() => navigate("/")}>Messages</button>
+            <button className={showingIncidents ? "active" : ""} type="button" onClick={() => navigate("/incidents")}>Incidents</button>
+          </nav>
           <span className="status-pill">
             <Shield size={15} />
             Basic auth
@@ -465,6 +489,64 @@ export default function App() {
           </span>
         </div>
       </header>
+
+      {showingIncidents ? (
+        <main className="incidents-page">
+          <div className="page-heading">
+            <div>
+              <button className="back-link" type="button" onClick={() => navigate("/")}><ArrowLeft size={16} /> Messages</button>
+              <h2><CircleAlert size={21} /> Primary WAN incidents</h2>
+              <p>Outages detected from logical WAN status reported by GL.iNet routers. Backup availability is unknown.</p>
+            </div>
+            <button className="command-button secondary-command" type="button" disabled={sendingNotification} onClick={() => void handleTestNotification()}>
+              <Bell size={16} className={sendingNotification ? "spin" : ""} /> Test notification
+            </button>
+          </div>
+
+          <section className={`analysis-status ${incidentHealth?.running && !incidentHealth.stale && !incidentHealth.last_error ? "healthy" : "unhealthy"}`}>
+            <strong>{incidentLoadError ? "Incident status unavailable" : incidentHealth?.last_error ? "Incident analysis failed" : incidentHealth?.stale ? "Incident analysis is stale" : incidentHealth?.running ? "Incident analysis is healthy" : "Incident analysis is stopped"}</strong>
+            <span>{incidentLoadError || incidentHealth?.last_error || `${incidentHealth?.pending_jobs ?? 0} notification${incidentHealth?.pending_jobs === 1 ? "" : "s"} queued`}</span>
+          </section>
+
+          {notificationResult && (
+            <div className={notificationResult.kind === "success" ? "notice-banner inline-result" : "error-banner inline-result"} role="status">
+              <strong>{notificationResult.kind === "success" ? "Notification test passed" : "Notification test failed"}</strong>
+              <span>{notificationResult.message}</span>
+            </div>
+          )}
+
+          <section className="incident-section" aria-labelledby="current-incidents-heading">
+            <div className="section-heading">
+              <div>
+                <h3 id="current-incidents-heading">Current incidents</h3>
+                <p>Failures being confirmed, active outages, and recoveries being confirmed.</p>
+              </div>
+              <span className={`count-badge ${currentIncidents.length > 0 ? "alert" : "clear"}`}>{currentIncidents.length}</span>
+            </div>
+            {currentIncidents.length > 0 ? (
+              <IncidentTable incidents={currentIncidents} onEvidence={(id) => { setFilterInput(id); setPage(0); navigate("/"); }} />
+            ) : (
+              <div className="active-clear">No current primary WAN incidents</div>
+            )}
+          </section>
+
+          <section className="incident-section" aria-labelledby="incident-history-heading">
+            <div className="section-heading">
+              <div>
+                <h3 id="incident-history-heading">Incident history</h3>
+                <p>Most recent resolved incidents, newest first.</p>
+              </div>
+              <span className="count-badge">{resolvedIncidents.length}</span>
+            </div>
+            {resolvedIncidents.length > 0 ? (
+              <IncidentTable incidents={resolvedIncidents} onEvidence={(id) => { setFilterInput(id); setPage(0); navigate("/"); }} />
+            ) : (
+              <div className="empty-state">No resolved incidents</div>
+            )}
+          </section>
+        </main>
+      ) : (
+      <>
 
       <section className="toolbar" aria-label="Timeline controls">
         <div className="host-filter">
@@ -652,49 +734,22 @@ export default function App() {
       {error && <div className="error-banner">{error}</div>}
       {notice && <div className="notice-banner">{notice}</div>}
 
-      <section className="incidents-panel" aria-label="Primary WAN incidents">
-        <div className="incidents-heading">
+      <section className="incident-summary" aria-label="Current primary WAN incidents">
+        <div className="incident-summary-heading">
           <div>
-            <h2><CircleAlert size={19} /> Primary WAN incidents</h2>
-            <p>Logical WAN status reported by GL.iNet routers. Backup availability is unknown.</p>
+            <strong>{incidentLoadError ? "Primary WAN status unavailable" : currentIncidents.length > 0 ? `${currentIncidents.length} current primary WAN incident${currentIncidents.length === 1 ? "" : "s"}` : "Primary WAN is healthy"}</strong>
+            <span>{incidentLoadError ? "Open the incidents page for the error details." : currentIncidents.length > 0 ? "Current outage status from the incident analyser." : "No outage is active or being confirmed."}</span>
           </div>
-          <div className="incident-actions">
-            <span className={`analysis-health ${incidentHealth?.running && !incidentHealth.stale && !incidentHealth.last_error ? "healthy" : "unhealthy"}`}>
-              {incidentHealth?.last_error ? "Analysis error" : incidentHealth?.stale ? "Analysis stale" : incidentHealth?.running ? `Analysis healthy · ${incidentHealth.pending_jobs} queued` : "Analysis stopped"}
-            </span>
-            <button className="command-button secondary-command" type="button" disabled={sendingNotification} onClick={() => void handleTestNotification()}>
-              <Bell size={16} className={sendingNotification ? "spin" : ""} /> Test notification
-            </button>
+          <button className="text-button" type="button" onClick={() => navigate("/incidents")}>View incidents</button>
+        </div>
+        {currentIncidents.map((incident) => (
+          <div className={`current-incident ${incident.state}`} key={incident.id}>
+            <strong>{incident.hostname} · {incident.interface}</strong>
+            <span className={`state-badge ${incident.state}`}>{stateLabel(incident.state)}</span>
+            <span>Detected {formatDate(incident.started_at)}</span>
+            <span>{durationBetween(incident.started_at, incident.resolved_at)}</span>
           </div>
-        </div>
-        {activeIncidents.length > 0 ? (
-          <div className="active-alert"><strong>{activeIncidents.length} primary WAN {activeIncidents.length === 1 ? "incident" : "incidents"} active</strong></div>
-        ) : (
-          <div className="active-clear">No active primary WAN incidents</div>
-        )}
-        {pendingIncidents.length > 0 && (
-          <div className="pending-alert">{pendingIncidents.length} primary WAN {pendingIncidents.length === 1 ? "failure is" : "failures are"} being confirmed</div>
-        )}
-        <div className="incident-list">
-          {[...activeIncidents, ...pendingIncidents, ...resolvedIncidents.slice(0, 10)].map((incident) => (
-            <article className={`incident-card ${incident.state}`} key={incident.id}>
-              <div>
-                <strong>{incident.hostname} · {incident.interface}</strong>
-                <span className="incident-state">{incident.state.replace("_", " ")}</span>
-              </div>
-              <div className="incident-times">
-                <span>Started {formatDate(incident.started_at)}</span>
-                {incident.activated_at && <span>Activated {formatDate(incident.activated_at)}</span>}
-                {incident.resolved_at && <span>Recovered {formatDate(incident.resolved_at)}</span>}
-                <span>Duration {durationBetween(incident.started_at, incident.resolved_at)}</span>
-                <span>{deliveryLabel(incident)}</span>
-              </div>
-              <div className="evidence-links">
-                {incident.evidence_ids.map((id) => <button type="button" key={id} onClick={() => { setFilterInput(id); setPage(0); }}>{id.slice(0, 10)}…</button>)}
-              </div>
-            </article>
-          ))}
-        </div>
+        ))}
       </section>
 
       <main className="table-shell">
@@ -753,8 +808,39 @@ export default function App() {
           </tbody>
         </table>
       </main>
+      </>
+      )}
     </div>
   );
+}
+
+function IncidentTable({ incidents, onEvidence }: { incidents: Incident[]; onEvidence: (id: string) => void }) {
+  return (
+    <div className="incident-table-wrap">
+      <table className="incident-table">
+        <thead><tr><th>Host / interface</th><th>Status</th><th>Detected</th><th>Outage confirmed</th><th>Recovered</th><th>Duration</th><th>Notification</th><th>Evidence</th></tr></thead>
+        <tbody>{incidents.map((incident) => (
+          <tr key={incident.id} className={incident.state}>
+            <td><strong>{incident.hostname}</strong><span className="cell-detail">{incident.interface}</span></td>
+            <td><span className={`state-badge ${incident.state}`}>{stateLabel(incident.state)}</span></td>
+            <td>{formatDate(incident.started_at)}</td>
+            <td>{incident.activated_at ? formatDate(incident.activated_at) : "—"}</td>
+            <td>{incident.resolved_at ? formatDate(incident.resolved_at) : "—"}</td>
+            <td>{durationBetween(incident.started_at, incident.resolved_at)}</td>
+            <td>{deliveryLabel(incident)}</td>
+            <td><button className="evidence-button" type="button" onClick={() => onEvidence(incident.evidence_ids[0])} disabled={incident.evidence_ids.length === 0}>{incident.evidence_ids.length} event{incident.evidence_ids.length === 1 ? "" : "s"}</button></td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function stateLabel(state: Incident["state"]): string {
+  if (state === "pending_failure") return "Confirming failure";
+  if (state === "pending_recovery") return "Confirming recovery";
+  if (state === "active") return "Outage active";
+  return "Resolved";
 }
 
 function durationBetween(start: string, end?: string): string {
