@@ -1,13 +1,11 @@
 package storage
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -26,8 +24,10 @@ const (
 )
 
 type FileStore struct {
-	root string
-	mu   sync.Mutex
+	root    string
+	mu      sync.Mutex
+	indexMu sync.Mutex
+	indexes map[string]*fileIndex
 }
 
 func NewFileStore(root string) (*FileStore, error) {
@@ -78,59 +78,6 @@ func (s *FileStore) Append(ctx context.Context, msg model.Message) error {
 	return nil
 }
 
-func (s *FileStore) Query(ctx context.Context, query Query) ([]model.Message, error) {
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultQueryLimit
-	}
-
-	files, err := s.messageFiles()
-	if err != nil {
-		return nil, err
-	}
-
-	text := strings.ToLower(strings.TrimSpace(query.Text))
-	hosts := selectedHosts(query.Hosts)
-	messages := make([]model.Message, 0, limit)
-
-	for _, file := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		dayMessages, err := readMessageFile(file)
-		if err != nil {
-			return nil, err
-		}
-		for i := len(dayMessages) - 1; i >= 0; i-- {
-			msg := dayMessages[i]
-			if !withinWindow(msg, query.Since, query.Until) {
-				continue
-			}
-			if len(hosts) > 0 && !matchesHost(msg, hosts) {
-				continue
-			}
-			if text != "" && !matchesText(msg, text) {
-				continue
-			}
-			messages = append(messages, msg)
-		}
-	}
-
-	sort.Slice(messages, func(i, j int) bool {
-		return messages[i].ReceivedAt.After(messages[j].ReceivedAt)
-	})
-	if query.Offset > 0 {
-		if query.Offset >= len(messages) {
-			return []model.Message{}, nil
-		}
-		messages = messages[query.Offset:]
-	}
-	if len(messages) > limit {
-		messages = messages[:limit]
-	}
-	return messages, nil
-}
-
 func (s *FileStore) pathFor(msg model.Message) string {
 	utc := msg.ReceivedAt.UTC()
 	return filepath.Join(
@@ -161,41 +108,6 @@ func (s *FileStore) messageFiles() ([]string, error) {
 	return files, nil
 }
 
-func readMessageFile(path string) ([]model.Message, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open message partition %s: %w", path, err)
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	var messages []model.Message
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerToken)
-	for scanner.Scan() {
-		var msg model.Message
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
-			return nil, fmt.Errorf("decode message partition %s: %w", path, err)
-		}
-		messages = append(messages, msg)
-	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read message partition %s: %w", path, err)
-	}
-	return messages, nil
-}
-
-func withinWindow(msg model.Message, since, until *time.Time) bool {
-	if since != nil && msg.ReceivedAt.Before(*since) {
-		return false
-	}
-	if until != nil && msg.ReceivedAt.After(*until) {
-		return false
-	}
-	return true
-}
-
 func selectedHosts(values []string) map[string]struct{} {
 	hosts := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -206,11 +118,6 @@ func selectedHosts(values []string) map[string]struct{} {
 		hosts[host] = struct{}{}
 	}
 	return hosts
-}
-
-func matchesHost(msg model.Message, hosts map[string]struct{}) bool {
-	_, ok := hosts[msg.Hostname]
-	return ok
 }
 
 func matchesText(msg model.Message, needle string) bool {

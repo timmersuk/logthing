@@ -328,3 +328,26 @@ paths are replaced with `_`, and messages without a source use `unknown`.
 Query reads scan all matching source files and return messages in latest-first
 order. This is intended for local history and operational browsing, not as a
 high-cardinality analytics engine.
+
+### Query performance
+
+The file store builds an in-memory timestamp, hostname, and byte-position index
+on the first query. Subsequent refreshes and page requests read only the message
+bodies needed for the result. Newly appended lines are indexed incrementally;
+historical imports remain ordered by `received_at`. No data migration is needed.
+The index is rebuilt after a restart, so the first request remains proportional
+to archive size. Index memory grows with event count. Text searches still need
+to read candidate message bodies, and large offsets require walking index entries.
+
+Partitions are append-only while the server is running. Deletion, truncation,
+replacement, and same-size edits with changed modification times invalidate the
+cached partition index. Stop/restart the server around other in-place archive
+rewrites; a growing file is treated as an append.
+
+To measure cold indexing and assert that subsequent unfiltered page queries take
+less than one second on a local dataset (hardware-dependent, opt-in):
+
+```powershell
+$env:LOGTHING_BENCH_DATA = 'D:\projects\logthing_data\2026'
+go test ./internal/storage -run TestLocalDatasetLatency -v -count=1
+```
