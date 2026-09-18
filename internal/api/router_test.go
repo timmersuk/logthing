@@ -1,8 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -75,6 +79,7 @@ type fakeStore struct {
 	messages []model.Message
 	queries  *[]storage.Query
 	appends  *[]model.Message
+	queryErr error
 }
 
 func (s fakeStore) Append(_ context.Context, msg model.Message) error {
@@ -88,7 +93,41 @@ func (s fakeStore) Query(_ context.Context, query storage.Query) ([]model.Messag
 	if s.queries != nil {
 		*s.queries = append(*s.queries, query)
 	}
-	return s.messages, nil
+	return s.messages, s.queryErr
+}
+
+func TestMessagesIgnoreCanceledQuery(t *testing.T) {
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	router := newTestRouter(t, fakeStore{queryErr: fmt.Errorf("read index: %w", context.Canceled)})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if logs.Len() != 0 {
+		t.Fatalf("log output = %q, want canceled request to be silent", logs.String())
+	}
+	if res.Body.Len() != 0 {
+		t.Fatalf("body = %q, want no response after client cancellation", res.Body.String())
+	}
+}
+
+func TestMessagesStillReportQueryFailure(t *testing.T) {
+	router := newTestRouter(t, fakeStore{queryErr: errors.New("disk unavailable")})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
 }
 
 func TestMessagesRequireBasicAuth(t *testing.T) {

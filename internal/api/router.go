@@ -298,6 +298,9 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	storeQuery.Limit = query.Limit + 1
 	messages, err := s.store.Query(r.Context(), storeQuery)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+			return
+		}
 		if errors.Is(err, storage.ErrInvalidFilter) {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 			return
