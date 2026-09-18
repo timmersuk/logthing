@@ -2,7 +2,10 @@ FROM debian:bookworm-slim
 
 ARG TARGETPLATFORM
 
-RUN useradd --uid 10001 --gid users --home-dir /nonexistent \
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --uid 10001 --gid users --home-dir /nonexistent \
     --shell /usr/sbin/nologin --no-create-home logthing && \
     mkdir -p /data/messages && \
     chown -R logthing:users /data

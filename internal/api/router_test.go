@@ -1,8 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -14,8 +18,15 @@ import (
 
 	"github.com/timmersuk/logthing/internal/incidents"
 	"github.com/timmersuk/logthing/internal/model"
+	"github.com/timmersuk/logthing/internal/notification"
 	"github.com/timmersuk/logthing/internal/storage"
 )
+
+type failingNotifier struct{}
+
+func (failingNotifier) Send(context.Context, notification.Notification) (notification.Receipt, error) {
+	return notification.Receipt{}, notification.NewSendError("send Discord notification: TLS certificate verification failed", false, 0)
+}
 
 func TestIncidentsListActiveIncludesPendingRecoveryAndDelivery(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
@@ -75,6 +86,7 @@ type fakeStore struct {
 	messages []model.Message
 	queries  *[]storage.Query
 	appends  *[]model.Message
+	queryErr error
 }
 
 func (s fakeStore) Append(_ context.Context, msg model.Message) error {
@@ -88,7 +100,70 @@ func (s fakeStore) Query(_ context.Context, query storage.Query) ([]model.Messag
 	if s.queries != nil {
 		*s.queries = append(*s.queries, query)
 	}
-	return s.messages, nil
+	return s.messages, s.queryErr
+}
+
+func TestNotificationTestReturnsSafeDeliveryFailure(t *testing.T) {
+	engine, err := incidents.New(incidents.Config{Interface: "wan", DownAfter: time.Minute, RecoveredAfter: time.Minute}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := incidents.NewWorker(engine, nil, failingNotifier{}, time.Now())
+	router, err := NewRouter(Config{
+		Store: fakeStore{}, IncidentWorker: worker,
+		Frontend:    fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}},
+		SwaggerUI:   fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}},
+		OpenAPISpec: []byte(`{"openapi":"3.0.3"}`),
+		Credentials: Credentials{Username: "admin", Password: "secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/test", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadGateway)
+	}
+	if !strings.Contains(res.Body.String(), "TLS certificate verification failed") {
+		t.Fatalf("body = %q, want safe delivery failure", res.Body.String())
+	}
+}
+
+func TestMessagesIgnoreCanceledQuery(t *testing.T) {
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	router := newTestRouter(t, fakeStore{queryErr: fmt.Errorf("read index: %w", context.Canceled)})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if logs.Len() != 0 {
+		t.Fatalf("log output = %q, want canceled request to be silent", logs.String())
+	}
+	if res.Body.Len() != 0 {
+		t.Fatalf("body = %q, want no response after client cancellation", res.Body.String())
+	}
+}
+
+func TestMessagesStillReportQueryFailure(t *testing.T) {
+	router := newTestRouter(t, fakeStore{queryErr: errors.New("disk unavailable")})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
 }
 
 func TestMessagesRequireBasicAuth(t *testing.T) {

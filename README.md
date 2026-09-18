@@ -222,10 +222,13 @@ a notification. The import button uploads NDJSON to
 rows as NDJSON. The `Send test event` button calls `/api/v1/test-event`, which
 asks the server to send one syslog message to `LOGTHING_TEST_EVENT_TARGET`.
 
-The incident panel polls derived incident state every 15 seconds. It shows
-active primary-WAN failures, recovery debounce, recent resolved history,
-delivery state, worker health, and evidence links. Its test-notification button
-exercises the configured adapter without creating an incident.
+The summary on `/` polls derived incident state every 15 seconds and shows
+whether any primary-WAN incident is current. The `/incidents` page separates
+current incidents from resolved history and labels the detection, confirmation,
+recovery, duration, notification, and evidence columns. It also shows the full
+worker error when analysis fails. Its test-notification button exercises the
+configured adapter without creating an incident and reports that result beside
+the button.
 
 Browsers cannot send raw UDP or TCP syslog packets directly through normal web
 APIs, so the button uses a server-side sender. The CLI sender above is the
