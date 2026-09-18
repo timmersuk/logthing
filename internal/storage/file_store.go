@@ -121,7 +121,11 @@ func selectedHosts(values []string) map[string]struct{} {
 }
 
 func matchesText(msg model.Message, needle string) bool {
-	haystack := strings.ToLower(strings.Join([]string{
+	return strings.Contains(strings.ToLower(messageSearchText(msg)), needle)
+}
+
+func messageSearchText(msg model.Message) string {
+	return strings.Join([]string{
 		msg.ID,
 		msg.Transport,
 		msg.Source,
@@ -133,8 +137,7 @@ func matchesText(msg model.Message, needle string) bool {
 		msg.Message,
 		jsonText(msg.StructuredData),
 		jsonText(msg.Raw),
-	}, " "))
-	return strings.Contains(haystack, needle)
+	}, " ")
 }
 
 func jsonText(value any) string {

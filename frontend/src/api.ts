@@ -33,14 +33,15 @@ export async function listMessages(
     if (response.status === 401) {
       throw new Error("Authentication required");
     }
-    throw new Error(`Request failed with HTTP ${response.status}`);
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error ?? `Request failed with HTTP ${response.status}`);
   }
 
   return response.json() as Promise<MessagesResponse>;
 }
 
-export function openMessageStream(): EventSource {
-  return new EventSource("/api/v1/messages/stream");
+export function openMessageStream(query: string): EventSource {
+  return new EventSource(`/api/v1/messages/stream?${new URLSearchParams({ q: query })}`);
 }
 
 export async function sendTestEvent(signal?: AbortSignal): Promise<void> {

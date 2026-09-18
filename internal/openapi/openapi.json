@@ -63,7 +63,7 @@
             "name": "q",
             "in": "query",
             "required": false,
-            "description": "Case-insensitive text filter across common syslog fields, structured data, and raw parser fields.",
+            "description": "Case-insensitive literal text filter across common syslog fields, structured data, and raw parser fields. Use /pattern/ for Go/RE2 regular expressions, for example /pppoe|lcp/. Invalid patterns return 400.",
             "schema": {
               "type": "string"
             }
@@ -188,7 +188,24 @@
             "basicAuth": []
           }
         ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive literal text or /pattern/ Go/RE2 regex, with the same matching rules as message history.",
+            "schema": { "type": "string" }
+          }
+        ],
         "responses": {
+          "400": {
+            "description": "Invalid regular expression",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
           "200": {
             "description": "Server-Sent Events stream of new messages",
             "content": {

@@ -351,3 +351,20 @@ less than one second on a local dataset (hardware-dependent, opt-in):
 $env:LOGTHING_BENCH_DATA = 'D:\projects\logthing_data\2026'
 go test ./internal/storage -run TestLocalDatasetLatency -v -count=1
 ```
+
+### Text and regular-expression filters
+
+The table filter and API `q` parameter use case-insensitive literal text by
+default. Wrap a pattern in slashes to use a regular expression:
+
+- `/pppoe|lcp/` matches either PPPoE or LCP events.
+- `/\b(pppoe|lcp)\b/` matches those as whole words.
+- `pppoe|lcp` without slashes still searches for that literal text.
+
+Regex searches are case-insensitive by default and use Go/RE2 syntax (no
+lookaround or backreferences). Inline flags such as `(?-i)` can override case
+matching. Patterns apply to the joined searchable fields, just like text search.
+Invalid patterns return HTTP 400 with an explanation. The live SSE endpoint also
+accepts `q` and uses the same matcher, so live and historical results agree.
+Regex filters still scan candidate message bodies; the timestamp index is not a
+full-text search index.

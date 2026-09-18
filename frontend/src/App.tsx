@@ -73,41 +73,6 @@ function sortedUniqueHosts(hosts: string[]): string[] {
   ).sort((a, b) => a.localeCompare(b));
 }
 
-function messageSearchText(message: SyslogMessage): string {
-  return [
-    message.id,
-    message.transport,
-    message.source,
-    message.hostname,
-    message.app_name,
-    message.proc_id,
-    message.msg_id,
-    message.tag,
-    message.message,
-    formatJSON(message.structured_data),
-    formatJSON(message.raw),
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
-function matchesVisibleFilters(
-  message: SyslogMessage,
-  filter: string,
-  hosts: string[],
-): boolean {
-  if (hosts.length > 0 && !hosts.includes(message.hostname ?? "")) {
-    return false;
-  }
-
-  const query = filter.trim().toLowerCase();
-  if (query !== "" && !messageSearchText(message).includes(query)) {
-    return false;
-  }
-
-  return true;
-}
-
 function receivedAtMillis(message: SyslogMessage): number {
   const parsed = Date.parse(message.received_at);
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -126,6 +91,7 @@ export default function App() {
   const [messages, setMessages] = useState<SyslogMessage[]>([]);
   const [filterInput, setFilterInput] = useState("");
   const [filter, setFilter] = useState("");
+  const [validatedFilter, setValidatedFilter] = useState<string | null>(null);
   const [selectedHosts, setSelectedHosts] = useState<string[]>([]);
   const [knownHosts, setKnownHosts] = useState<string[]>([]);
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
@@ -237,6 +203,7 @@ export default function App() {
           },
           signal,
         );
+        setValidatedFilter(filter);
         messagesRef.current = response.data;
         setMessages(response.data);
         setHasMore(response.meta.has_more);
@@ -281,11 +248,11 @@ export default function App() {
   }, [autoRefresh, liveDisabled]);
 
   useEffect(() => {
-    if (!autoRefresh || page !== 0 || liveUnavailable) {
+    if (!autoRefresh || page !== 0 || liveUnavailable || validatedFilter !== filter) {
       return undefined;
     }
 
-    const events = openMessageStream();
+    const events = openMessageStream(filter);
     const handleMessage = (event: MessageEvent) => {
       let message: SyslogMessage;
       try {
@@ -300,7 +267,7 @@ export default function App() {
       );
       setLastUpdated(new Date());
 
-      if (!matchesVisibleFilters(message, filter, selectedHosts)) {
+      if (selectedHosts.length > 0 && !selectedHosts.includes(message.hostname ?? "")) {
         return;
       }
 
@@ -333,6 +300,7 @@ export default function App() {
     };
   }, [
     autoRefresh,
+    validatedFilter,
     filter,
     liveUnavailable,
     page,
@@ -492,7 +460,9 @@ export default function App() {
           <input
             value={filterInput}
             onChange={(event) => setFilterInput(event.target.value)}
-            placeholder="Filter messages"
+            placeholder="Text or /pppoe|lcp/"
+            aria-label="Filter messages"
+            title="Case-insensitive text search, or /regex/ such as /pppoe|lcp/"
             spellCheck={false}
           />
         </label>
