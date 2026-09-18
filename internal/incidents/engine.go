@@ -357,14 +357,14 @@ func (s *Service) advanceLocked(now time.Time) bool {
 	for key, current := range s.state.Trackers {
 		switch current.Phase {
 		case phasePendingFailure:
-			if now.Sub(current.PendingSince) < s.cfg.DownAfter {
-				continue
-			}
-			activated := current.PendingSince.Add(s.cfg.DownAfter)
 			incident, exists := s.state.Incidents[current.IncidentID]
 			if !exists {
 				continue
 			}
+			if now.Sub(current.PendingSince) < incident.DownAfter {
+				continue
+			}
+			activated := current.PendingSince.Add(incident.DownAfter)
 			incident.State = StateActive
 			incident.ActivatedAt = &activated
 			incident.Notify = current.Notify
@@ -376,14 +376,14 @@ func (s *Service) advanceLocked(now time.Time) bool {
 			}
 			changed = true
 		case phasePendingRecovery:
-			if now.Sub(current.RecoverySince) < s.cfg.RecoveredAfter {
-				continue
-			}
-			resolved := current.RecoverySince.Add(s.cfg.RecoveredAfter)
 			incident, exists := s.state.Incidents[current.IncidentID]
 			if !exists {
 				continue
 			}
+			if now.Sub(current.RecoverySince) < incident.RecoveredAfter {
+				continue
+			}
+			resolved := current.RecoverySince.Add(incident.RecoveredAfter)
 			incident.State = StateResolved
 			incident.ResolvedAt = &resolved
 			s.state.Incidents[incident.ID] = incident
@@ -476,13 +476,18 @@ func (s *Service) MarkNotificationSent(ctx context.Context, id, adapter, externa
 	if !exists {
 		return fmt.Errorf("notification job %q not found", id)
 	}
+	previous := job
 	sent := at.UTC()
 	job.SentAt = &sent
 	job.Adapter = adapter
 	job.ExternalID = externalID
 	job.LastError = ""
 	s.state.Jobs[id] = job
-	return s.saveLocked(ctx)
+	if err := s.saveLocked(ctx); err != nil {
+		s.state.Jobs[id] = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Service) MarkNotificationFailed(ctx context.Context, id, message string, next time.Time, permanent bool) error {
@@ -492,12 +497,17 @@ func (s *Service) MarkNotificationFailed(ctx context.Context, id, message string
 	if !exists {
 		return fmt.Errorf("notification job %q not found", id)
 	}
+	previous := job
 	job.Attempts++
 	job.LastError = message
 	job.NextAt = next.UTC()
 	job.Permanent = permanent
 	s.state.Jobs[id] = job
-	return s.saveLocked(ctx)
+	if err := s.saveLocked(ctx); err != nil {
+		s.state.Jobs[id] = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Service) Cursors() map[string]storage.Cursor {

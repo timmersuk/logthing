@@ -45,6 +45,10 @@ type SendError struct {
 
 func (e *SendError) Error() string { return e.message }
 
+func NewSendError(message string, permanent bool, retryAfter time.Duration) *SendError {
+	return &SendError{Permanent: permanent, RetryAfter: retryAfter, message: message}
+}
+
 func AsSendError(err error, target **SendError) bool {
 	return errors.As(err, target)
 }

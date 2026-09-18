@@ -44,6 +44,19 @@ or 4G fallback does not resolve a primary-WAN incident. Notification delivery is
 at least once, so a process crash immediately after Discord accepts a webhook
 can produce a duplicate message.
 
+The down and recovery thresholds are captured when an incident starts. Changing
+the duration environment variables affects new incidents; an existing pending or
+active incident keeps its original thresholds across a restart.
+
+Raw-message append and derived-state checkpointing are separate filesystem
+operations. The state snapshot itself is replaced atomically, and startup plus
+periodic reconciliation replays complete message records after the saved cursor.
+An abrupt process or power failure can therefore replay a record, and underlying
+filesystem durability still determines whether a recently acknowledged append
+survives. The operational guarantee is at-least-once notification delivery with
+reconciliation and controlled rebuilding when a partition change is detected,
+not crash-proof exactly-once processing.
+
 Port `514` normally requires elevated privileges. The default syslog port is
 therefore `5514` for local development.
 

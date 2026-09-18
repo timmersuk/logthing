@@ -34,6 +34,10 @@ func TestIncidentsListActiveIncludesPendingRecoveryAndDelivery(t *testing.T) {
 	if err := engine.Observe(context.Background(), up, true); err != nil {
 		t.Fatal(err)
 	}
+	job := engine.PendingNotifications()[0]
+	if err := engine.MarkNotificationFailed(context.Background(), job.ID, "Discord notification returned HTTP 400", now, true); err != nil {
+		t.Fatal(err)
+	}
 
 	router, err := NewRouter(Config{
 		Store: fakeStore{}, Incidents: engine,
@@ -61,6 +65,9 @@ func TestIncidentsListActiveIncludesPendingRecoveryAndDelivery(t *testing.T) {
 	}
 	if body.Data[0].RuleVersion != 1 || len(body.Data[0].Deliveries) != 1 {
 		t.Fatalf("incident metadata = %#v", body.Data[0])
+	}
+	if !body.Data[0].Deliveries[0].Permanent || body.Data[0].Deliveries[0].LastError == "" {
+		t.Fatalf("delivery failure not visible = %#v", body.Data[0].Deliveries[0])
 	}
 }
 

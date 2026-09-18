@@ -3,6 +3,7 @@ package incidents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,6 +13,63 @@ import (
 	"github.com/timmersuk/logthing/internal/notification"
 	"github.com/timmersuk/logthing/internal/storage"
 )
+
+func TestWorkerRetriesTransientNotificationThenDelivers(t *testing.T) {
+	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	engine := activeEngineWithJob(t, nil, start)
+	notifier := &scriptedNotifier{results: []error{notification.NewSendError("temporary", false, 2*time.Minute), nil}}
+	worker := NewWorker(engine, nil, notifier, start)
+	if err := worker.dispatch(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	jobs := engine.PendingNotifications()
+	if len(jobs) != 1 || jobs[0].Attempts != 1 || !jobs[0].NextAt.Equal(start.Add(3*time.Minute)) {
+		t.Fatalf("retry job = %#v", jobs)
+	}
+	if err := worker.dispatch(context.Background(), jobs[0].NextAt); err != nil {
+		t.Fatal(err)
+	}
+	deliveries := engine.NotificationsFor(singleIncident(t, engine).ID)
+	if len(deliveries) != 1 || deliveries[0].SentAt == nil || deliveries[0].Attempts != 1 {
+		t.Fatalf("deliveries = %#v", deliveries)
+	}
+}
+
+func TestWorkerStopsRetryingPermanentNotificationFailure(t *testing.T) {
+	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	engine := activeEngineWithJob(t, nil, start)
+	worker := NewWorker(engine, nil, &scriptedNotifier{results: []error{notification.NewSendError("bad request", true, 0)}}, start)
+	if err := worker.dispatch(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if jobs := engine.PendingNotifications(); len(jobs) != 0 {
+		t.Fatalf("pending jobs = %#v", jobs)
+	}
+	delivery := engine.NotificationsFor(singleIncident(t, engine).ID)[0]
+	if !delivery.Permanent || delivery.Attempts != 1 || delivery.LastError != "bad request" {
+		t.Fatalf("delivery = %#v", delivery)
+	}
+}
+
+func TestWorkerKeepsJobRetryableWhenDeliveryReceiptPersistenceFails(t *testing.T) {
+	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	persistence := &togglePersistence{}
+	engine := activeEngineWithJob(t, persistence, start)
+	persistence.fail = true
+	worker := NewWorker(engine, nil, &scriptedNotifier{results: []error{nil}}, start)
+	err := worker.dispatch(context.Background(), start.Add(time.Minute))
+	if err == nil {
+		t.Fatal("dispatch error = nil")
+	}
+	worker.recordError(err)
+	jobs := engine.PendingNotifications()
+	if len(jobs) != 1 || jobs[0].SentAt != nil {
+		t.Fatalf("pending jobs = %#v", jobs)
+	}
+	if worker.Health().LastError == "" {
+		t.Fatal("worker health did not report persistence error")
+	}
+}
 
 func TestWorkerReconcilesStoredEvidenceAndDeliversLifecycle(t *testing.T) {
 	t.Parallel()
@@ -238,6 +296,49 @@ func TestWorkerHealthBecomesStale(t *testing.T) {
 type recordingNotifier struct {
 	mu       sync.Mutex
 	messages []notification.Notification
+}
+
+type scriptedNotifier struct {
+	results []error
+	calls   int
+}
+
+func (n *scriptedNotifier) Send(_ context.Context, message notification.Notification) (notification.Receipt, error) {
+	index := n.calls
+	n.calls++
+	if index < len(n.results) && n.results[index] != nil {
+		return notification.Receipt{}, n.results[index]
+	}
+	return notification.Receipt{Adapter: "scripted", ExternalID: message.EventID}, nil
+}
+
+type togglePersistence struct {
+	state Snapshot
+	fail  bool
+}
+
+func (p *togglePersistence) Load(context.Context) (Snapshot, error) {
+	return cloneSnapshot(p.state), nil
+}
+func (p *togglePersistence) Save(_ context.Context, state Snapshot) error {
+	if p.fail {
+		return errors.New("persist delivery receipt")
+	}
+	p.state = cloneSnapshot(state)
+	return nil
+}
+
+func activeEngineWithJob(t *testing.T, persistence Persistence, start time.Time) *Service {
+	t.Helper()
+	engine, err := New(Config{DownAfter: time.Minute, RecoveredAfter: time.Minute}, persistence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observe(t, engine, wanMessage("router-a", "offline", start, "down"), true)
+	if err := engine.Tick(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	return engine
 }
 
 func (n *recordingNotifier) Send(_ context.Context, message notification.Notification) (notification.Receipt, error) {
