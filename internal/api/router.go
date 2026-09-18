@@ -15,7 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/timmersuk/logthing/internal/incidents"
 	"github.com/timmersuk/logthing/internal/model"
+	"github.com/timmersuk/logthing/internal/notification"
 	"github.com/timmersuk/logthing/internal/storage"
 )
 
@@ -25,14 +27,17 @@ const (
 )
 
 type Config struct {
-	Store       storage.Store
-	Events      MessageSubscriber
-	Frontend    fs.FS
-	SwaggerUI   fs.FS
-	OpenAPISpec []byte
-	TestEvent   TestEventSender
-	Credentials Credentials
-	BuildID     string
+	Store          storage.Store
+	Events         MessageSubscriber
+	Frontend       fs.FS
+	SwaggerUI      fs.FS
+	OpenAPISpec    []byte
+	TestEvent      TestEventSender
+	Credentials    Credentials
+	BuildID        string
+	Incidents      *incidents.Service
+	IncidentWorker *incidents.Worker
+	PublicURL      string
 }
 
 type TestEventSender func(context.Context, string) (TestEventResult, error)
@@ -48,14 +53,17 @@ type TestEventResult struct {
 }
 
 type server struct {
-	store       storage.Store
-	events      MessageSubscriber
-	frontend    fs.FS
-	swaggerUI   fs.FS
-	openAPISpec []byte
-	testEvent   TestEventSender
-	auth        *basicAuth
-	buildID     string
+	store          storage.Store
+	events         MessageSubscriber
+	frontend       fs.FS
+	swaggerUI      fs.FS
+	openAPISpec    []byte
+	testEvent      TestEventSender
+	auth           *basicAuth
+	buildID        string
+	incidents      *incidents.Service
+	incidentWorker *incidents.Worker
+	publicURL      string
 }
 
 type errorResponse struct {
@@ -116,14 +124,17 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	}
 
 	srv := &server{
-		store:       cfg.Store,
-		events:      cfg.Events,
-		frontend:    cfg.Frontend,
-		swaggerUI:   cfg.SwaggerUI,
-		openAPISpec: cfg.OpenAPISpec,
-		testEvent:   cfg.TestEvent,
-		auth:        auth,
-		buildID:     cfg.BuildID,
+		store:          cfg.Store,
+		events:         cfg.Events,
+		frontend:       cfg.Frontend,
+		swaggerUI:      cfg.SwaggerUI,
+		openAPISpec:    cfg.OpenAPISpec,
+		testEvent:      cfg.TestEvent,
+		auth:           auth,
+		buildID:        cfg.BuildID,
+		incidents:      cfg.Incidents,
+		incidentWorker: cfg.IncidentWorker,
+		publicURL:      cfg.PublicURL,
 	}
 
 	apiMux := http.NewServeMux()
@@ -131,6 +142,10 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	apiMux.HandleFunc("/api/v1/messages/import", srv.withMethod(http.MethodPost, srv.handleImportMessages))
 	apiMux.HandleFunc("/api/v1/messages/stream", srv.withMethod(http.MethodGet, srv.handleMessageStream))
 	apiMux.HandleFunc("/api/v1/test-event", srv.withMethod(http.MethodPost, srv.handleTestEvent))
+	apiMux.HandleFunc("/api/v1/incidents", srv.withMethod(http.MethodGet, srv.handleIncidents))
+	apiMux.HandleFunc("/api/v1/incidents/health", srv.withMethod(http.MethodGet, srv.handleIncidentHealth))
+	apiMux.HandleFunc("/api/v1/incidents/", srv.withMethod(http.MethodGet, srv.handleIncident))
+	apiMux.HandleFunc("/api/v1/notifications/test", srv.withMethod(http.MethodPost, srv.handleTestNotification))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthcheck", srv.withMethod(http.MethodGet, srv.handleHealthcheck))
@@ -141,6 +156,127 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	mux.Handle("/", auth.require(http.HandlerFunc(srv.handleFrontend)))
 
 	return mux, nil
+}
+
+type incidentsResponse struct {
+	Data []incidentResponse `json:"data"`
+	Meta messagesMeta       `json:"meta"`
+}
+
+type incidentResponse struct {
+	incidents.Incident
+	Deliveries []incidents.NotificationJob `json:"deliveries"`
+}
+
+func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
+	if s.incidents == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "incident processing unavailable"})
+		return
+	}
+	limit, offset, err := parsePagination(r, 100, 1000)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if state != "" && state != "active" && state != "resolved" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "state must be active or resolved"})
+		return
+	}
+	all := s.incidents.List(incidents.Query{})
+	filtered := make([]incidents.Incident, 0, len(all))
+	for _, incident := range all {
+		active := incident.State == incidents.StateActive || incident.State == incidents.StatePendingRecovery
+		if state == "active" && !active {
+			continue
+		}
+		if state == "resolved" && incident.State != incidents.StateResolved {
+			continue
+		}
+		filtered = append(filtered, incident)
+	}
+	start := offset
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	end := start + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	data := make([]incidentResponse, 0, end-start)
+	for _, incident := range filtered[start:end] {
+		data = append(data, incidentResponse{Incident: incident, Deliveries: s.incidents.NotificationsFor(incident.ID)})
+	}
+	writeJSON(w, http.StatusOK, incidentsResponse{
+		Data: data,
+		Meta: messagesMeta{Count: end - start, Limit: limit, Offset: offset, HasMore: end < len(filtered)},
+	})
+}
+
+func (s *server) handleIncident(w http.ResponseWriter, r *http.Request) {
+	if s.incidents == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "incident processing unavailable"})
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/incidents/")
+	if id == "" || strings.Contains(id, "/") {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "incident not found"})
+		return
+	}
+	incident, ok := s.incidents.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "incident not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, incidentResponse{Incident: incident, Deliveries: s.incidents.NotificationsFor(incident.ID)})
+}
+
+func (s *server) handleIncidentHealth(w http.ResponseWriter, _ *http.Request) {
+	if s.incidentWorker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "incident processing unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.incidentWorker.Health())
+}
+
+func (s *server) handleTestNotification(w http.ResponseWriter, r *http.Request) {
+	if s.incidentWorker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "notification delivery unavailable"})
+		return
+	}
+	receipt, err := s.incidentWorker.SendTest(r.Context())
+	if err != nil {
+		if errors.Is(err, notification.ErrNotConfigured) {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+			return
+		}
+		logRequestFailure(r, http.StatusBadGateway, "send test notification: %v", err)
+		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "send test notification"})
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Status  string               `json:"status"`
+		Receipt notification.Receipt `json:"receipt"`
+	}{Status: "sent", Receipt: receipt})
+}
+
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (int, int, error) {
+	limit := defaultLimit
+	offset := 0
+	var err error
+	if value := r.URL.Query().Get("limit"); value != "" {
+		limit, err = strconv.Atoi(value)
+		if err != nil || limit <= 0 || limit > maxLimit {
+			return 0, 0, fmt.Errorf("limit must be between 1 and %d", maxLimit)
+		}
+	}
+	if value := r.URL.Query().Get("offset"); value != "" {
+		offset, err = strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return 0, 0, errors.New("offset must be zero or greater")
+		}
+	}
+	return limit, offset, nil
 }
 
 func (s *server) handleHealthcheck(w http.ResponseWriter, _ *http.Request) {

@@ -32,3 +32,45 @@ export interface ImportMessagesResponse {
   imported: number;
   skipped: number;
 }
+
+export interface NotificationDelivery {
+  id: string;
+  kind: "incident_opened" | "incident_resolved";
+  attempts: number;
+  last_error?: string;
+  sent_at?: string;
+  adapter?: string;
+  permanent?: boolean;
+}
+
+export interface Incident {
+  id: string;
+  rule_version: number;
+  hostname: string;
+  interface: string;
+  state: "active" | "pending_recovery" | "resolved";
+  started_at: string;
+  activated_at: string;
+  recovery_first_at?: string;
+  resolved_at?: string;
+  last_evidence_at: string;
+  evidence_ids: string[];
+  evidence_refs?: string[];
+  down_after: number;
+  recovered_after: number;
+  deliveries: NotificationDelivery[];
+}
+
+export interface IncidentsResponse {
+  data: Incident[];
+  meta: MessagesResponse["meta"];
+}
+
+export interface IncidentHealth {
+  running: boolean;
+  stale: boolean;
+  last_reconciled_at?: string;
+  last_processed_at?: string;
+  last_error?: string;
+  pending_jobs: number;
+}

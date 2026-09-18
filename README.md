@@ -30,6 +30,19 @@ later Parquet compaction or replacement store a contained change.
 | `LOGTHING_TEST_EVENT_NETWORK` | derived from listener config | Test-event sender network: `udp` or `tcp`. |
 | `LOGTHING_TEST_EVENT_TARGET` | derived from listener config | Test-event sender destination, usually `127.0.0.1:5514`. |
 | `LOGTHING_DATA_DIR` | `data/messages` | Root directory for local message files. |
+| `LOGTHING_STATE_DIR` | sibling `state` directory | Durable incident state, file cursors, and notification outbox. |
+| `LOGTHING_WAN_INTERFACE` | `wan` | GL.iNet logical primary-WAN interface to monitor. |
+| `LOGTHING_WAN_DOWN_AFTER` | `60s` | Continuous offline period before opening an incident. |
+| `LOGTHING_WAN_RECOVERED_AFTER` | `60s` | Continuous primary-WAN online period before resolving an incident. |
+| `LOGTHING_NOTIFIER` | `none` | Notification adapter: `none` or `discord`. |
+| `LOGTHING_DISCORD_WEBHOOK_URL` | empty | Discord webhook URL, required when the notifier is `discord`. |
+| `LOGTHING_PUBLIC_URL` | empty | Optional public base URL for notification links. |
+
+Incident processing always runs for every named host. It recognizes exact
+`gl-repeater` messages for `interface wan status offline` and `online`; a Wi-Fi
+or 4G fallback does not resolve a primary-WAN incident. Notification delivery is
+at least once, so a process crash immediately after Discord accepts a webhook
+can produce a duplicate message.
 
 Port `514` normally requires elevated privileges. The default syslog port is
 therefore `5514` for local development.
@@ -113,6 +126,10 @@ Authenticated:
 | `GET` | `/api/v1/messages/stream` | none | Streams newly appended messages as Server-Sent Events. |
 | `POST` | `/api/v1/messages/import` | none | Imports newline-delimited JSON messages into local storage. |
 | `POST` | `/api/v1/test-event` | none | Sends one server-side RFC5424 test event to the configured syslog destination. |
+| `GET` | `/api/v1/incidents` | `state`, `limit`, `offset` | Lists active and resolved primary-WAN incidents. |
+| `GET` | `/api/v1/incidents/{id}` | none | Returns one incident and its notification deliveries. |
+| `GET` | `/api/v1/incidents/health` | none | Returns incident-worker health and delivery backlog. |
+| `POST` | `/api/v1/notifications/test` | none | Sends a test through the configured notification adapter. |
 
 `host` is an exact syslog hostname filter and can be repeated for multiple
 hosts. `since` and `until` use RFC3339 timestamps and filter on `received_at`.
@@ -191,6 +208,11 @@ a notification. The import button uploads NDJSON to
 `/api/v1/messages/import`, and the export button downloads the currently visible
 rows as NDJSON. The `Send test event` button calls `/api/v1/test-event`, which
 asks the server to send one syslog message to `LOGTHING_TEST_EVENT_TARGET`.
+
+The incident panel polls derived incident state every 15 seconds. It shows
+active primary-WAN failures, recovery debounce, recent resolved history,
+delivery state, worker health, and evidence links. Its test-notification button
+exercises the configured adapter without creating an incident.
 
 Browsers cannot send raw UDP or TCP syslog packets directly through normal web
 APIs, so the button uses a server-side sender. The CLI sender above is the

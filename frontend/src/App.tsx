@@ -10,6 +10,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Bell,
+  CircleAlert,
   Database,
   Download,
   Pause,
@@ -28,8 +30,11 @@ import {
   openMessageStream,
   sendTestEvent,
   fetchBuildID,
+  getIncidentHealth,
+  listIncidents,
+  sendTestNotification,
 } from "./api";
-import type { SyslogMessage } from "./types";
+import type { Incident, IncidentHealth, SyslogMessage } from "./types";
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -106,12 +111,40 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [buildId, setBuildId] = useState<string>("");
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [incidentHealth, setIncidentHealth] = useState<IncidentHealth | null>(null);
+  const [sendingNotification, setSendingNotification] = useState(false);
 
   useEffect(() => {
     fetchBuildID()
       .then(setBuildId)
       .catch((err) => console.error("Failed to fetch build ID:", err));
   }, []);
+
+  const refreshIncidents = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const [response, health] = await Promise.all([
+        listIncidents(signal),
+        getIncidentHealth(signal),
+      ]);
+      setIncidents(response.data);
+      setIncidentHealth(health);
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "Incident refresh failed");
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void refreshIncidents(controller.signal);
+    const interval = window.setInterval(() => void refreshIncidents(), 15000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [refreshIncidents]);
 
   const [pageSizeSetting, setPageSizeSetting] = useState<number | "auto">(
     () => {
@@ -327,6 +360,23 @@ export default function App() {
       setSendingTest(false);
     }
   }, []);
+
+  const handleTestNotification = useCallback(async () => {
+    setSendingNotification(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await sendTestNotification();
+      setNotice("Test notification sent");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Test notification failed");
+    } finally {
+      setSendingNotification(false);
+    }
+  }, []);
+
+  const activeIncidents = incidents.filter((incident) => incident.state !== "resolved");
+  const resolvedIncidents = incidents.filter((incident) => incident.state === "resolved");
 
   const handleImportFile = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -599,6 +649,48 @@ export default function App() {
       {error && <div className="error-banner">{error}</div>}
       {notice && <div className="notice-banner">{notice}</div>}
 
+      <section className="incidents-panel" aria-label="Primary WAN incidents">
+        <div className="incidents-heading">
+          <div>
+            <h2><CircleAlert size={19} /> Primary WAN incidents</h2>
+            <p>Logical WAN status reported by GL.iNet routers. Backup availability is unknown.</p>
+          </div>
+          <div className="incident-actions">
+            <span className={`analysis-health ${incidentHealth?.running && !incidentHealth.stale && !incidentHealth.last_error ? "healthy" : "unhealthy"}`}>
+              {incidentHealth?.last_error ? "Analysis error" : incidentHealth?.stale ? "Analysis stale" : incidentHealth?.running ? `Analysis healthy · ${incidentHealth.pending_jobs} queued` : "Analysis stopped"}
+            </span>
+            <button className="command-button secondary-command" type="button" disabled={sendingNotification} onClick={() => void handleTestNotification()}>
+              <Bell size={16} className={sendingNotification ? "spin" : ""} /> Test notification
+            </button>
+          </div>
+        </div>
+        {activeIncidents.length > 0 ? (
+          <div className="active-alert"><strong>{activeIncidents.length} primary WAN {activeIncidents.length === 1 ? "incident" : "incidents"} active</strong></div>
+        ) : (
+          <div className="active-clear">No active primary WAN incidents</div>
+        )}
+        <div className="incident-list">
+          {[...activeIncidents, ...resolvedIncidents.slice(0, 10)].map((incident) => (
+            <article className={`incident-card ${incident.state}`} key={incident.id}>
+              <div>
+                <strong>{incident.hostname} · {incident.interface}</strong>
+                <span className="incident-state">{incident.state.replace("_", " ")}</span>
+              </div>
+              <div className="incident-times">
+                <span>Started {formatDate(incident.started_at)}</span>
+                <span>Activated {formatDate(incident.activated_at)}</span>
+                {incident.resolved_at && <span>Recovered {formatDate(incident.resolved_at)}</span>}
+                <span>Duration {durationBetween(incident.started_at, incident.resolved_at)}</span>
+                <span>{deliveryLabel(incident)}</span>
+              </div>
+              <div className="evidence-links">
+                {incident.evidence_ids.map((id) => <button type="button" key={id} onClick={() => { setFilterInput(id); setPage(0); }}>{id.slice(0, 10)}…</button>)}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <main className="table-shell">
         <table>
           <thead>
@@ -657,4 +749,19 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+function durationBetween(start: string, end?: string): string {
+  const milliseconds = (end ? Date.parse(end) : Date.now()) - Date.parse(start);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "";
+  const minutes = Math.floor(milliseconds / 60000);
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+function deliveryLabel(incident: Incident): string {
+  if (incident.deliveries.some((delivery) => delivery.last_error && !delivery.sent_at)) return "Delivery failed";
+  if (incident.deliveries.some((delivery) => !delivery.sent_at)) return "Delivery pending";
+  if (incident.deliveries.length > 0) return "Delivered";
+  return "No notification";
 }

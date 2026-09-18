@@ -12,9 +12,57 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/timmersuk/logthing/internal/incidents"
 	"github.com/timmersuk/logthing/internal/model"
 	"github.com/timmersuk/logthing/internal/storage"
 )
+
+func TestIncidentsListActiveIncludesPendingRecoveryAndDelivery(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	engine, err := incidents.New(incidents.Config{Interface: "wan", DownAfter: time.Minute, RecoveredAfter: time.Minute}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	down := model.Message{ID: "down", Hostname: "router-a", Tag: "gl-repeater", Message: "(repeater.lua:1741) interface wan status offline", ReceivedAt: now}
+	if err := engine.Observe(context.Background(), down, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Tick(context.Background(), now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	up := model.Message{ID: "up", Hostname: "router-a", Tag: "gl-repeater", Message: "(repeater.lua:1741) interface wan status online", ReceivedAt: now.Add(2 * time.Minute)}
+	if err := engine.Observe(context.Background(), up, true); err != nil {
+		t.Fatal(err)
+	}
+
+	router, err := NewRouter(Config{
+		Store: fakeStore{}, Incidents: engine,
+		Frontend:    fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}},
+		SwaggerUI:   fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}},
+		OpenAPISpec: []byte(`{"openapi":"3.0.3"}`),
+		Credentials: Credentials{Username: "admin", Password: "secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents?state=active", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", res.Code, res.Body.String())
+	}
+	var body incidentsResponse
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 1 || body.Data[0].State != incidents.StatePendingRecovery {
+		t.Fatalf("data = %#v", body.Data)
+	}
+	if body.Data[0].RuleVersion != 1 || len(body.Data[0].Deliveries) != 1 {
+		t.Fatalf("incident metadata = %#v", body.Data[0])
+	}
+}
 
 type fakeStore struct {
 	messages []model.Message

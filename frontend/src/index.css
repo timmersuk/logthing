@@ -403,6 +403,81 @@ p {
   background: #f0fdf4;
 }
 
+.incidents-panel {
+  margin: 0.85rem 1.25rem 0;
+  padding: 1rem;
+  border: 1px solid #d9e1d7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.incidents-heading,
+.incident-actions,
+.incident-card > div,
+.incident-times,
+.evidence-links {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.incidents-heading {
+  justify-content: space-between;
+}
+
+.incidents-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.analysis-health {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.analysis-health.healthy { color: #166534; }
+.analysis-health.unhealthy { color: #9a3412; }
+
+.active-alert,
+.active-clear {
+  margin-top: 0.8rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.active-alert { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; }
+.active-clear { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; }
+
+.incident-list { display: grid; gap: 0.5rem; margin-top: 0.7rem; }
+
+.incident-card {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(20rem, 2fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 0.75rem;
+  border-left: 3px solid #ef4444;
+  background: #fafbf9;
+  font-size: 0.82rem;
+}
+
+.incident-card.pending_recovery { border-left-color: #f59e0b; }
+.incident-card.resolved { border-left-color: #22c55e; }
+.incident-state { color: #647067; text-transform: capitalize; }
+.incident-times { color: #526058; justify-content: space-between; }
+
+.evidence-links button {
+  border: 0;
+  color: #0f766e;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
 .table-shell {
   min-width: 0;
   margin: 0.85rem 1.25rem 1.25rem;
@@ -511,4 +586,10 @@ tbody tr:hover td {
   .table-shell {
     margin: 0.75rem;
   }
+
+  .incidents-panel { margin: 0.75rem 0.75rem 0; }
+  .incidents-heading { align-items: flex-start; flex-direction: column; }
+  .incident-actions { width: 100%; justify-content: space-between; }
+  .incident-card { grid-template-columns: 1fr; gap: 0.45rem; }
+  .incident-times { align-items: flex-start; flex-direction: column; }
 }
