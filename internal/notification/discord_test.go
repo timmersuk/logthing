@@ -3,12 +3,19 @@ package notification
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
 
 func TestDiscordNotifierSendsPortableNotification(t *testing.T) {
 	t.Parallel()
@@ -95,6 +102,29 @@ func TestDiscordNotifierDoesNotLeakWebhookURL(t *testing.T) {
 	_, err = notifier.Send(context.Background(), Notification{Title: "test"})
 	if err == nil {
 		t.Fatal("Send() error = nil, want failure")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error leaked webhook secret: %v", err)
+	}
+}
+
+func TestDiscordNotifierReportsSanitizedTransportCause(t *testing.T) {
+	t.Parallel()
+
+	secret := "secret-webhook-token"
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("TLS verification failed for " + secret)
+	})}
+	notifier, err := newDiscord("https://discord.example/api/webhooks/12345678/"+secret, time.Second, client)
+	if err != nil {
+		t.Fatalf("newDiscord() error = %v", err)
+	}
+	_, err = notifier.Send(context.Background(), Notification{Title: "test"})
+	if err == nil {
+		t.Fatal("Send() error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "TLS verification failed") {
+		t.Fatalf("error = %q, want transport cause", err)
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("error leaked webhook secret: %v", err)

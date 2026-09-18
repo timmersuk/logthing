@@ -251,7 +251,12 @@ func (s *server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		logRequestFailure(r, http.StatusBadGateway, "send test notification: %v", err)
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "send test notification"})
+		message := "send test notification"
+		var sendErr *notification.SendError
+		if notification.AsSendError(err, &sendErr) {
+			message = sendErr.Error()
+		}
+		writeJSON(w, http.StatusBadGateway, errorResponse{Error: message})
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {

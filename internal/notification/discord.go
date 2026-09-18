@@ -69,7 +69,7 @@ func (n *DiscordNotifier) Send(ctx context.Context, message Notification) (Recei
 	request.Header.Set("Content-Type", "application/json")
 	response, err := n.client.Do(request)
 	if err != nil {
-		return Receipt{}, &SendError{message: "send Discord notification"}
+		return Receipt{}, &SendError{message: "send Discord notification: " + n.safeTransportCause(err)}
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
@@ -92,6 +92,28 @@ func (n *DiscordNotifier) Send(ctx context.Context, message Notification) (Recei
 		}
 	}
 	return Receipt{Adapter: "discord", ExternalID: externalID}, nil
+}
+
+func (n *DiscordNotifier) safeTransportCause(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "request timed out"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "request canceled"
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	cause := err.Error()
+	secrets := []string{n.webhook.String(), n.webhook.EscapedPath(), n.webhook.Path, n.webhook.RawQuery}
+	secrets = append(secrets, strings.Split(strings.Trim(n.webhook.Path, "/"), "/")...)
+	for _, secret := range secrets {
+		if len(secret) >= 8 {
+			cause = strings.ReplaceAll(cause, secret, "[redacted]")
+		}
+	}
+	return cause
 }
 
 func retryAfter(value string) time.Duration {
