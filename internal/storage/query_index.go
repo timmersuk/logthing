@@ -140,6 +140,10 @@ func (h *queryHeap) Push(x any)   { *h = append(*h, x.(indexCursor)) }
 func (h *queryHeap) Pop() any     { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }
 
 func (s *FileStore) Query(ctx context.Context, query Query) ([]model.Message, error) {
+	match, err := CompileTextFilter(query.Text)
+	if err != nil {
+		return nil, err
+	}
 	indexes, files, err := s.queryIndexes(ctx)
 	if err != nil {
 		return nil, err
@@ -209,7 +213,7 @@ func (s *FileStore) Query(ctx context.Context, query Query) ([]model.Message, er
 		if err = json.Unmarshal(data, &msg); err != nil {
 			return nil, err
 		}
-		if text != "" && !matchesText(msg, text) {
+		if text != "" && !match(msg) {
 			continue
 		}
 		if skipped < query.Offset {

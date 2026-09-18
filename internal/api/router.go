@@ -162,6 +162,10 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	storeQuery.Limit = query.Limit + 1
 	messages, err := s.store.Query(r.Context(), storeQuery)
 	if err != nil {
+		if errors.Is(err, storage.ErrInvalidFilter) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
 		logRequestFailure(r, http.StatusInternalServerError, "query messages: %v", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "query messages"})
 		return
@@ -203,6 +207,11 @@ func (s *server) handleImportMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleMessageStream(w http.ResponseWriter, r *http.Request) {
+	match, err := storage.CompileTextFilter(r.URL.Query().Get("q"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
 	if s.events == nil {
 		logRequestFailure(r, http.StatusServiceUnavailable, "message stream is not configured")
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "message stream is not configured"})
@@ -241,6 +250,9 @@ func (s *server) handleMessageStream(w http.ResponseWriter, r *http.Request) {
 		case msg, ok := <-messages:
 			if !ok {
 				return
+			}
+			if !match(msg) {
+				continue
 			}
 			if err := writeMessageEvent(w, msg); err != nil {
 				logRequestFailure(r, http.StatusInternalServerError, "write message stream event: %v", err)
