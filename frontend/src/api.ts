@@ -1,4 +1,4 @@
-import type { ImportMessagesResponse, MessagesResponse } from "./types";
+import type { IncidentHealth, IncidentsResponse, ImportMessagesResponse, MessagesResponse } from "./types";
 
 interface ListMessagesParams {
   query: string;
@@ -101,4 +101,35 @@ export async function fetchBuildID(): Promise<string> {
 
   const data = await response.json() as { build_id?: string };
   return data.build_id || "Unknown";
+}
+
+async function checkedJSON<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error ?? `Request failed with HTTP ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function listIncidents(state: "pending_failure" | "active" | "resolved", signal?: AbortSignal): Promise<IncidentsResponse> {
+  const query = new URLSearchParams({ state, limit: "100" });
+  return checkedJSON<IncidentsResponse>(await fetch(`/api/v1/incidents?${query}`, {
+    signal,
+    credentials: "same-origin"
+  }));
+}
+
+export async function getIncidentHealth(signal?: AbortSignal): Promise<IncidentHealth> {
+  return checkedJSON<IncidentHealth>(await fetch("/api/v1/incidents/health", {
+    signal,
+    credentials: "same-origin"
+  }));
+}
+
+export async function sendTestNotification(signal?: AbortSignal): Promise<void> {
+  await checkedJSON(await fetch("/api/v1/notifications/test", {
+    method: "POST",
+    signal,
+    credentials: "same-origin"
+  }));
 }

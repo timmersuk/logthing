@@ -7,11 +7,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/timmersuk/logthing/internal/api"
 	"github.com/timmersuk/logthing/internal/config"
+	"github.com/timmersuk/logthing/internal/incidents"
+	"github.com/timmersuk/logthing/internal/model"
+	"github.com/timmersuk/logthing/internal/notification"
 	"github.com/timmersuk/logthing/internal/openapi"
 	"github.com/timmersuk/logthing/internal/realtime"
 	"github.com/timmersuk/logthing/internal/storage"
@@ -33,13 +37,33 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	store, err := storage.NewFileStore(cfg.DataDir)
 	if err != nil {
 		return err
 	}
+	incidentEngine, err := incidents.New(incidents.Config{
+		Interface:      cfg.WANInterface,
+		DownAfter:      cfg.WANDownAfter,
+		RecoveredAfter: cfg.WANRecoveredAfter,
+	}, incidents.NewFilePersistence(filepath.Join(cfg.StateDir, "incidents.json")))
+	if err != nil {
+		return err
+	}
+	if err := incidentEngine.Load(ctx); err != nil {
+		return err
+	}
+	notifier, err := newNotifier(cfg)
+	if err != nil {
+		return err
+	}
+	incidentWorker := incidents.NewWorker(incidentEngine, store, notifier, time.Now().UTC(), cfg.PublicURL)
+	go incidentWorker.Run(ctx)
+
 	events := realtime.NewHub()
-	publishingStore := realtime.NewPublishingStore(store, events)
+	publishingStore := realtime.NewPublishingStore(store, multiPublisher{events, incidentWorker})
 
 	frontend, err := fs.Sub(web.Files, "dist")
 	if err != nil {
@@ -61,7 +85,9 @@ func run() error {
 			Username: cfg.Username,
 			Password: cfg.Password,
 		},
-		BuildID: BuildID,
+		BuildID:        BuildID,
+		Incidents:      incidentEngine,
+		IncidentWorker: incidentWorker,
 	})
 	if err != nil {
 		return err
@@ -97,9 +123,6 @@ func run() error {
 
 	log.Printf("syslog listening udp=%q tcp=%q format=%s", cfg.SyslogUDPAddr, cfg.SyslogTCPAddr, cfg.SyslogFormat)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	select {
 	case <-ctx.Done():
 	case err := <-serverErr:
@@ -116,6 +139,25 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+type multiPublisher []interface{ Publish(model.Message) }
+
+func (publishers multiPublisher) Publish(message model.Message) {
+	for _, publisher := range publishers {
+		if publisher != nil {
+			publisher.Publish(message)
+		}
+	}
+}
+
+func newNotifier(cfg config.Config) (notification.Notifier, error) {
+	switch cfg.Notifier {
+	case config.NotifierDiscord:
+		return notification.NewDiscord(cfg.DiscordWebhookURL, 5*time.Second)
+	default:
+		return notification.DiscardNotifier{}, nil
+	}
 }
 
 func newTestEventSender(cfg config.Config) api.TestEventSender {

@@ -392,6 +392,44 @@
           }
         }
       }
+    },
+    "/api/v1/incidents": {
+      "get": {
+        "tags": ["incidents"],
+        "summary": "List primary-WAN incidents",
+        "security": [{"basicAuth": []}],
+        "parameters": [
+          {"name": "state", "in": "query", "schema": {"type": "string", "enum": ["pending_failure", "active", "resolved"]}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}},
+          {"name": "offset", "in": "query", "schema": {"type": "integer", "minimum": 0, "default": 0}}
+        ],
+        "responses": {"200": {"description": "Incident results", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentsResponse"}}}}}
+      }
+    },
+    "/api/v1/incidents/{id}": {
+      "get": {
+        "tags": ["incidents"],
+        "summary": "Get a primary-WAN incident",
+        "security": [{"basicAuth": []}],
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Incident", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Incident"}}}}, "404": {"description": "Incident not found"}}
+      }
+    },
+    "/api/v1/incidents/health": {
+      "get": {
+        "tags": ["incidents"],
+        "summary": "Get incident worker health",
+        "security": [{"basicAuth": []}],
+        "responses": {"200": {"description": "Worker health", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentHealth"}}}}}
+      }
+    },
+    "/api/v1/notifications/test": {
+      "post": {
+        "tags": ["test"],
+        "summary": "Send a test notification",
+        "security": [{"basicAuth": []}],
+        "responses": {"200": {"description": "Notification sent"}, "502": {"description": "Notification delivery failed"}}
+      }
     }
   },
   "components": {
@@ -429,6 +467,52 @@
           "meta": {
             "$ref": "#/components/schemas/MessagesMeta"
           }
+        }
+      },
+      "IncidentsResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {"type": "array", "items": {"$ref": "#/components/schemas/Incident"}},
+          "meta": {"$ref": "#/components/schemas/MessagesMeta"}
+        }
+      },
+      "Incident": {
+        "type": "object",
+        "required": ["id", "rule_version", "hostname", "interface", "state", "started_at", "evidence_ids", "deliveries"],
+        "properties": {
+          "id": {"type": "string"},
+          "rule_version": {"type": "integer", "example": 1},
+          "hostname": {"type": "string"},
+          "interface": {"type": "string", "example": "wan"},
+          "state": {"type": "string", "enum": ["pending_failure", "active", "pending_recovery", "resolved"]},
+          "started_at": {"type": "string", "format": "date-time"},
+          "activated_at": {"type": "string", "format": "date-time"},
+          "recovery_first_at": {"type": "string", "format": "date-time"},
+          "resolved_at": {"type": "string", "format": "date-time"},
+          "last_evidence_at": {"type": "string", "format": "date-time"},
+          "evidence_ids": {"type": "array", "items": {"type": "string"}},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}},
+          "down_after": {"type": "integer", "description": "Debounce in nanoseconds."},
+          "recovered_after": {"type": "integer", "description": "Recovery debounce in nanoseconds."},
+          "deliveries": {"type": "array", "items": {"$ref": "#/components/schemas/NotificationDelivery"}}
+        }
+      },
+      "NotificationDelivery": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"}, "kind": {"type": "string"}, "attempts": {"type": "integer"},
+          "last_error": {"type": "string"}, "sent_at": {"type": "string", "format": "date-time"},
+          "adapter": {"type": "string"}, "external_id": {"type": "string"}, "permanent": {"type": "boolean"}
+        }
+      },
+      "IncidentHealth": {
+        "type": "object",
+        "required": ["running", "stale", "pending_jobs"],
+        "properties": {
+          "running": {"type": "boolean"}, "stale": {"type": "boolean"}, "pending_jobs": {"type": "integer"},
+          "last_reconciled_at": {"type": "string", "format": "date-time"},
+          "last_processed_at": {"type": "string", "format": "date-time"}, "last_error": {"type": "string"}
         }
       },
       "MessagesMeta": {
