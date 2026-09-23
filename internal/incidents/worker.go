@@ -106,7 +106,7 @@ func (w *Worker) reconcile(ctx context.Context, now time.Time) error {
 	rebuilding := false
 	changedFile := ""
 	next, err := w.reader.VisitAfter(ctx, cursors, func(record storage.StoredRecord) error {
-		if _, supported := classify(record.Message, w.engine.cfg.Interface); supported {
+		if _, supported := classify(record.Message, w.engine.cfg.Interface, w.engine.cfg.WANDevice); supported {
 			records = append(records, record)
 		}
 		return nil
@@ -116,7 +116,7 @@ func (w *Worker) reconcile(ctx context.Context, now time.Time) error {
 		changedFile = file
 		records = nil
 		next, err = w.reader.VisitAfter(ctx, nil, func(record storage.StoredRecord) error {
-			if _, supported := classify(record.Message, w.engine.cfg.Interface); supported {
+			if _, supported := classify(record.Message, w.engine.cfg.Interface, w.engine.cfg.WANDevice); supported {
 				records = append(records, record)
 			}
 			return nil

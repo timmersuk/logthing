@@ -46,6 +46,7 @@ func run() error {
 	}
 	incidentEngine, err := incidents.New(incidents.Config{
 		Interface:      cfg.WANInterface,
+		WANDevice:      cfg.WANDevice,
 		DownAfter:      cfg.WANDownAfter,
 		RecoveredAfter: cfg.WANRecoveredAfter,
 	}, incidents.NewFilePersistence(filepath.Join(cfg.StateDir, "incidents.json")))

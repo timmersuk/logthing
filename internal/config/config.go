@@ -30,6 +30,7 @@ type Config struct {
 	Password          string
 	StateDir          string
 	WANInterface      string
+	WANDevice         string
 	WANDownAfter      time.Duration
 	WANRecoveredAfter time.Duration
 	Notifier          NotifierKind
@@ -64,6 +65,7 @@ func FromEnv() (Config, error) {
 		Password:          os.Getenv("LOGTHING_PASSWORD"),
 		StateDir:          stateDir,
 		WANInterface:      envDefault("LOGTHING_WAN_INTERFACE", "wan"),
+		WANDevice:         envDefault("LOGTHING_WAN_DEVICE", "pppoe-wan"),
 		WANDownAfter:      downAfter,
 		WANRecoveredAfter: recoveredAfter,
 		Notifier:          NotifierKind(strings.ToLower(envDefault("LOGTHING_NOTIFIER", string(NotifierNone)))),

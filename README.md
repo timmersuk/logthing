@@ -32,6 +32,7 @@ later Parquet compaction or replacement store a contained change.
 | `LOGTHING_DATA_DIR` | `data/messages` | Root directory for local message files. |
 | `LOGTHING_STATE_DIR` | sibling `state` directory | Durable incident state, file cursors, and notification outbox. |
 | `LOGTHING_WAN_INTERFACE` | `wan` | GL.iNet logical primary-WAN interface to monitor. |
+| `LOGTHING_WAN_DEVICE` | `pppoe-wan` | Primary network device used for exact netifd link-state matching. |
 | `LOGTHING_WAN_DOWN_AFTER` | `60s` | Continuous offline period before opening an incident. |
 | `LOGTHING_WAN_RECOVERED_AFTER` | `60s` | Continuous primary-WAN online period before resolving an incident. |
 | `LOGTHING_NOTIFIER` | `none` | Notification adapter: `none` or `discord`. |
@@ -39,8 +40,9 @@ later Parquet compaction or replacement store a contained change.
 | `LOGTHING_PUBLIC_URL` | empty | Optional public base URL for notification links. |
 
 Incident processing always runs for every named host. It recognizes exact
-`gl-repeater` messages for `interface wan status offline` and `online`; a Wi-Fi
-or 4G fallback does not resolve a primary-WAN incident. Notification delivery is
+`gl-repeater` reachability messages and exact `netifd` state changes for the
+configured primary WAN interface and device. A Wi-Fi or 4G fallback does not
+hide or resolve a primary-WAN incident. Notification delivery is
 at least once, so a process crash immediately after Discord accepts a webhook
 can produce a duplicate message.
 

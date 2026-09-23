@@ -33,6 +33,7 @@ const (
 
 type Config struct {
 	Interface      string
+	WANDevice      string
 	DownAfter      time.Duration
 	RecoveredAfter time.Duration
 }
@@ -104,14 +105,15 @@ const (
 )
 
 type tracker struct {
-	Phase          phase     `json:"phase"`
-	PendingSince   time.Time `json:"pending_since,omitempty"`
-	RecoverySince  time.Time `json:"recovery_since,omitempty"`
-	LastEvidenceAt time.Time `json:"last_evidence_at,omitempty"`
-	StartMessageID string    `json:"start_message_id,omitempty"`
-	StartSourceRef string    `json:"start_source_ref,omitempty"`
-	IncidentID     string    `json:"incident_id,omitempty"`
-	Notify         bool      `json:"notify"`
+	Phase                        phase     `json:"phase"`
+	PendingSince                 time.Time `json:"pending_since,omitempty"`
+	RecoverySince                time.Time `json:"recovery_since,omitempty"`
+	LastEvidenceAt               time.Time `json:"last_evidence_at,omitempty"`
+	StartMessageID               string    `json:"start_message_id,omitempty"`
+	StartSourceRef               string    `json:"start_source_ref,omitempty"`
+	IncidentID                   string    `json:"incident_id,omitempty"`
+	Notify                       bool      `json:"notify"`
+	RequiresReachabilityRecovery bool      `json:"requires_reachability_recovery,omitempty"`
 }
 
 type Snapshot struct {
@@ -139,6 +141,9 @@ type Service struct {
 func New(cfg Config, persistence Persistence) (*Service, error) {
 	if cfg.Interface == "" {
 		cfg.Interface = "wan"
+	}
+	if cfg.WANDevice == "" {
+		cfg.WANDevice = "pppoe-wan"
 	}
 	if cfg.DownAfter <= 0 {
 		return nil, errors.New("down duration must be positive")
@@ -171,6 +176,13 @@ func (s *Service) Load(ctx context.Context) error {
 		return fmt.Errorf("unsupported incident state version %d", state.Version)
 	}
 	initializeSnapshot(&state)
+	for key, current := range state.Trackers {
+		incident, exists := state.Incidents[current.IncidentID]
+		if exists && incident.RuleVersion == 1 && current.Phase != phaseHealthy {
+			current.RequiresReachabilityRecovery = true
+			state.Trackers[key] = current
+		}
+	}
 	s.mu.Lock()
 	s.state = state
 	s.mu.Unlock()
@@ -249,7 +261,7 @@ func (s *Service) LastCheckpointAt() time.Time {
 }
 
 func (s *Service) observeLocked(message model.Message, notifyEligible bool, sourceRef string) {
-	evidence, ok := classify(message, s.cfg.Interface)
+	evidence, ok := classify(message, s.cfg.Interface, s.cfg.WANDevice)
 	if !ok {
 		return
 	}
@@ -261,6 +273,9 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 	}
 	s.advanceLocked(evidence.at)
 	current = s.state.Trackers[key]
+	if evidence.online && current.RequiresReachabilityRecovery && !evidence.reachability {
+		return
+	}
 	current.LastEvidenceAt = evidence.at
 
 	switch evidence.online {
@@ -269,21 +284,23 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 		case "", phaseHealthy:
 			id := incidentID(evidence.hostname, evidence.iface, evidence.at, evidence.messageID)
 			current = tracker{
-				Phase:          phasePendingFailure,
-				PendingSince:   evidence.at,
-				LastEvidenceAt: evidence.at,
-				StartMessageID: evidence.messageID,
-				StartSourceRef: evidence.sourceRef,
-				IncidentID:     id,
-				Notify:         notifyEligible,
+				Phase:                        phasePendingFailure,
+				PendingSince:                 evidence.at,
+				LastEvidenceAt:               evidence.at,
+				StartMessageID:               evidence.messageID,
+				StartSourceRef:               evidence.sourceRef,
+				IncidentID:                   id,
+				Notify:                       notifyEligible,
+				RequiresReachabilityRecovery: evidence.reachability,
 			}
 			s.state.Incidents[id] = Incident{
-				ID: id, RuleVersion: 1, Hostname: evidence.hostname, Interface: evidence.iface,
+				ID: id, RuleVersion: 2, Hostname: evidence.hostname, Interface: evidence.iface,
 				State: StatePendingFailure, StartedAt: evidence.at, LastEvidenceAt: evidence.at,
 				EvidenceIDs: appendEvidence(nil, evidence.messageID), EvidenceRefs: appendEvidence(nil, evidence.sourceRef),
 				DownAfter: s.cfg.DownAfter, RecoveredAfter: s.cfg.RecoveredAfter, Notify: notifyEligible,
 			}
 		case phasePendingFailure:
+			current.RequiresReachabilityRecovery = current.RequiresReachabilityRecovery || evidence.reachability
 			current.Notify = current.Notify || notifyEligible
 			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
 				incident.Notify = current.Notify
@@ -295,6 +312,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 		case phasePendingRecovery:
 			current.Phase = phaseActive
 			current.RecoverySince = time.Time{}
+			current.RequiresReachabilityRecovery = current.RequiresReachabilityRecovery || evidence.reachability
 			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
 				incident.State = StateActive
 				incident.RecoveryFirstAt = nil
@@ -304,6 +322,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 				s.state.Incidents[incident.ID] = incident
 			}
 		case phaseActive:
+			current.RequiresReachabilityRecovery = current.RequiresReachabilityRecovery || evidence.reachability
 			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
 				incident.LastEvidenceAt = evidence.at
 				incident.EvidenceIDs = appendEvidence(incident.EvidenceIDs, evidence.messageID)
@@ -546,17 +565,32 @@ func (s *Service) saveLocked(ctx context.Context) error {
 }
 
 type evidence struct {
-	hostname  string
-	iface     string
-	online    bool
-	at        time.Time
-	messageID string
-	sourceRef string
+	hostname     string
+	iface        string
+	online       bool
+	at           time.Time
+	messageID    string
+	sourceRef    string
+	reachability bool
 }
 
-func classify(message model.Message, iface string) (evidence, bool) {
+func classify(message model.Message, iface, wanDevice string) (evidence, bool) {
 	hostname := strings.TrimSpace(message.Hostname)
-	if hostname == "" || message.Tag != "gl-repeater" || message.ReceivedAt.IsZero() {
+	if hostname == "" || message.ReceivedAt.IsZero() {
+		return evidence{}, false
+	}
+	if message.Tag == "netifd" {
+		status := strings.TrimSpace(message.Message)
+		down := status == "Interface '"+iface+"' has lost the connection" ||
+			status == "Interface '"+iface+"' is now down" ||
+			status == "Network device '"+wanDevice+"' link is down"
+		up := status == "Interface '"+iface+"' is now up"
+		if !down && !up {
+			return evidence{}, false
+		}
+		return evidence{hostname: hostname, iface: iface, online: up, at: message.ReceivedAt.UTC(), messageID: message.ID}, true
+	}
+	if message.Tag != "gl-repeater" {
 		return evidence{}, false
 	}
 	prefix := "interface " + iface + " status "
@@ -570,11 +604,12 @@ func classify(message model.Message, iface string) (evidence, bool) {
 		return evidence{}, false
 	}
 	return evidence{
-		hostname:  hostname,
-		iface:     iface,
-		online:    state == "online",
-		at:        message.ReceivedAt.UTC(),
-		messageID: message.ID,
+		hostname:     hostname,
+		iface:        iface,
+		online:       state == "online",
+		at:           message.ReceivedAt.UTC(),
+		messageID:    message.ID,
+		reachability: true,
 	}, true
 }
 

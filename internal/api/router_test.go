@@ -63,7 +63,7 @@ func TestIncidentsListActiveIncludesPendingRecoveryAndDelivery(t *testing.T) {
 	if len(body.Data) != 1 || body.Data[0].State != incidents.StatePendingRecovery {
 		t.Fatalf("data = %#v", body.Data)
 	}
-	if body.Data[0].RuleVersion != 1 || len(body.Data[0].Deliveries) != 1 {
+	if body.Data[0].RuleVersion != 2 || len(body.Data[0].Deliveries) != 1 {
 		t.Fatalf("incident metadata = %#v", body.Data[0])
 	}
 	if !body.Data[0].Deliveries[0].Permanent || body.Data[0].Deliveries[0].LastError == "" {
