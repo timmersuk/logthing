@@ -105,15 +105,15 @@ const (
 )
 
 type tracker struct {
-	Phase                        phase     `json:"phase"`
-	PendingSince                 time.Time `json:"pending_since,omitempty"`
-	RecoverySince                time.Time `json:"recovery_since,omitempty"`
-	LastEvidenceAt               time.Time `json:"last_evidence_at,omitempty"`
-	StartMessageID               string    `json:"start_message_id,omitempty"`
-	StartSourceRef               string    `json:"start_source_ref,omitempty"`
-	IncidentID                   string    `json:"incident_id,omitempty"`
-	Notify                       bool      `json:"notify"`
-	RequiresReachabilityRecovery bool      `json:"requires_reachability_recovery,omitempty"`
+	Phase            phase     `json:"phase"`
+	PendingSince     time.Time `json:"pending_since,omitempty"`
+	RecoverySince    time.Time `json:"recovery_since,omitempty"`
+	LastEvidenceAt   time.Time `json:"last_evidence_at,omitempty"`
+	StartMessageID   string    `json:"start_message_id,omitempty"`
+	StartSourceRef   string    `json:"start_source_ref,omitempty"`
+	IncidentID       string    `json:"incident_id,omitempty"`
+	Notify           bool      `json:"notify"`
+	ReachabilityDown bool      `json:"reachability_down"`
 }
 
 type Snapshot struct {
@@ -179,7 +179,7 @@ func (s *Service) Load(ctx context.Context) error {
 	for key, current := range state.Trackers {
 		incident, exists := state.Incidents[current.IncidentID]
 		if exists && incident.RuleVersion == 1 && current.Phase != phaseHealthy {
-			current.RequiresReachabilityRecovery = true
+			current.ReachabilityDown = true
 			state.Trackers[key] = current
 		}
 	}
@@ -273,7 +273,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 	}
 	s.advanceLocked(evidence.at)
 	current = s.state.Trackers[key]
-	if evidence.online && current.RequiresReachabilityRecovery && !evidence.reachability {
+	if evidence.online && current.ReachabilityDown && !evidence.reachability {
 		return
 	}
 	current.LastEvidenceAt = evidence.at
@@ -284,14 +284,14 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 		case "", phaseHealthy:
 			id := incidentID(evidence.hostname, evidence.iface, evidence.at, evidence.messageID)
 			current = tracker{
-				Phase:                        phasePendingFailure,
-				PendingSince:                 evidence.at,
-				LastEvidenceAt:               evidence.at,
-				StartMessageID:               evidence.messageID,
-				StartSourceRef:               evidence.sourceRef,
-				IncidentID:                   id,
-				Notify:                       notifyEligible,
-				RequiresReachabilityRecovery: evidence.reachability,
+				Phase:            phasePendingFailure,
+				PendingSince:     evidence.at,
+				LastEvidenceAt:   evidence.at,
+				StartMessageID:   evidence.messageID,
+				StartSourceRef:   evidence.sourceRef,
+				IncidentID:       id,
+				Notify:           notifyEligible,
+				ReachabilityDown: evidence.reachability,
 			}
 			s.state.Incidents[id] = Incident{
 				ID: id, RuleVersion: 2, Hostname: evidence.hostname, Interface: evidence.iface,
@@ -300,7 +300,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 				DownAfter: s.cfg.DownAfter, RecoveredAfter: s.cfg.RecoveredAfter, Notify: notifyEligible,
 			}
 		case phasePendingFailure:
-			current.RequiresReachabilityRecovery = current.RequiresReachabilityRecovery || evidence.reachability
+			current.ReachabilityDown = current.ReachabilityDown || evidence.reachability
 			current.Notify = current.Notify || notifyEligible
 			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
 				incident.Notify = current.Notify
@@ -312,7 +312,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 		case phasePendingRecovery:
 			current.Phase = phaseActive
 			current.RecoverySince = time.Time{}
-			current.RequiresReachabilityRecovery = current.RequiresReachabilityRecovery || evidence.reachability
+			current.ReachabilityDown = current.ReachabilityDown || evidence.reachability
 			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
 				incident.State = StateActive
 				incident.RecoveryFirstAt = nil
@@ -322,7 +322,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 				s.state.Incidents[incident.ID] = incident
 			}
 		case phaseActive:
-			current.RequiresReachabilityRecovery = current.RequiresReachabilityRecovery || evidence.reachability
+			current.ReachabilityDown = current.ReachabilityDown || evidence.reachability
 			if incident, exists := s.state.Incidents[current.IncidentID]; exists {
 				incident.LastEvidenceAt = evidence.at
 				incident.EvidenceIDs = appendEvidence(incident.EvidenceIDs, evidence.messageID)
