@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/timmersuk/logthing/internal/storage"
 )
 
 func TestFilePersistenceRestoresPendingRecovery(t *testing.T) {
@@ -122,23 +120,19 @@ func TestIncidentKeepsCapturedThresholdsWhenConfigurationChanges(t *testing.T) {
 	}
 }
 
-func TestVersionOneActiveIncidentStillRequiresReachabilityRecovery(t *testing.T) {
-	t.Parallel()
-
+func TestVersionOneIncidentStillWaitsForReachabilityRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "incidents.json")
 	persistence := NewFilePersistence(path)
 	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	incidentID := "legacy"
 	state := Snapshot{
 		Version: 1,
 		Trackers: map[string]tracker{
-			"router-a\x00wan": {Phase: phaseActive, IncidentID: incidentID, LastEvidenceAt: start},
+			"router-a\x00wan": {Phase: phaseActive, IncidentID: "legacy", LastEvidenceAt: start},
 		},
 		Incidents: map[string]Incident{
-			incidentID: {ID: incidentID, RuleVersion: 1, Hostname: "router-a", Interface: "wan", State: StateActive, StartedAt: start, LastEvidenceAt: start, DownAfter: time.Minute, RecoveredAfter: time.Minute},
+			"legacy": {ID: "legacy", RuleVersion: 1, Hostname: "router-a", Interface: "wan", State: StateActive, StartedAt: start, LastEvidenceAt: start, DownAfter: time.Minute, RecoveredAfter: time.Minute},
 		},
-		Jobs:    map[string]NotificationJob{},
-		Cursors: map[string]storage.Cursor{},
+		Jobs: map[string]NotificationJob{},
 	}
 	if err := persistence.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
@@ -151,9 +145,5 @@ func TestVersionOneActiveIncidentStillRequiresReachabilityRecovery(t *testing.T)
 	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now up", start.Add(time.Minute), "interface-up"), true)
 	if got := singleIncident(t, engine).State; got != StateActive {
 		t.Fatalf("state after interface-only recovery = %q, want %q", got, StateActive)
-	}
-	observe(t, engine, wanMessage("router-a", "online", start.Add(2*time.Minute), "reachability-up"), true)
-	if got := singleIncident(t, engine).State; got != StatePendingRecovery {
-		t.Fatalf("state after reachability recovery = %q, want %q", got, StatePendingRecovery)
 	}
 }

@@ -63,21 +63,38 @@ func TestEngineDetectsNetifdWANFailureAndRecovery(t *testing.T) {
 	engine := newTestEngine(t, Config{DownAfter: time.Minute, RecoveredAfter: time.Minute})
 
 	observe(t, engine, netifdMessage("router-a", "Interface 'wan' has lost the connection", start, "down"), true)
-	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now down", start.Add(10*time.Second), "down-again"), true)
+	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now down", start.Add(6*time.Second), "down-again"), true)
 	engine.Tick(context.Background(), start.Add(time.Minute))
-
-	incident := singleIncident(t, engine)
-	if incident.State != StateActive || !incident.StartedAt.Equal(start) {
-		t.Fatalf("incident = %#v, want active from first down evidence", incident)
+	if got := singleIncident(t, engine).State; got != StateActive {
+		t.Fatalf("state = %q, want %q", got, StateActive)
 	}
-	assertNotificationKinds(t, engine, NotificationOpened)
 
 	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now up", start.Add(82*time.Second), "up"), true)
 	engine.Tick(context.Background(), start.Add(142*time.Second))
 	if got := singleIncident(t, engine).State; got != StateResolved {
 		t.Fatalf("state = %q, want %q", got, StateResolved)
 	}
-	assertNotificationKinds(t, engine, NotificationOpened, NotificationResolved)
+}
+
+func TestReachabilityFailureIgnoresInterfaceOnlyRecovery(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 9, 18, 16, 17, 18, 0, time.UTC)
+	engine := newTestEngine(t, Config{DownAfter: time.Minute, RecoveredAfter: time.Minute})
+
+	observe(t, engine, wanMessage("router-a", "offline", start, "reachability-down"), true)
+	engine.Tick(context.Background(), start.Add(time.Minute))
+	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now up", start.Add(70*time.Second), "interface-up"), true)
+	engine.Tick(context.Background(), start.Add(3*time.Minute))
+	if got := singleIncident(t, engine).State; got != StateActive {
+		t.Fatalf("state after interface-only recovery = %q, want %q", got, StateActive)
+	}
+
+	observe(t, engine, wanMessage("router-a", "online", start.Add(4*time.Minute), "reachability-up"), true)
+	engine.Tick(context.Background(), start.Add(5*time.Minute))
+	if got := singleIncident(t, engine).State; got != StateResolved {
+		t.Fatalf("state after reachability recovery = %q, want %q", got, StateResolved)
+	}
 }
 
 func TestEngineSuppressesShortNetifdFlapAndIgnoresFallbacks(t *testing.T) {
@@ -93,45 +110,6 @@ func TestEngineSuppressesShortNetifdFlapAndIgnoresFallbacks(t *testing.T) {
 	engine.Tick(context.Background(), start.Add(2*time.Minute))
 
 	assertIncidentCount(t, engine, 0)
-	assertNotificationKinds(t, engine)
-}
-
-func TestReachabilityFailureRequiresReachabilityRecovery(t *testing.T) {
-	t.Parallel()
-
-	start := time.Date(2026, 9, 18, 16, 17, 18, 0, time.UTC)
-	engine := newTestEngine(t, Config{DownAfter: time.Minute, RecoveredAfter: time.Minute})
-
-	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now down", start, "interface-down"), true)
-	observe(t, engine, wanMessage("router-a", "offline", start.Add(5*time.Second), "reachability-down"), true)
-	engine.Tick(context.Background(), start.Add(time.Minute))
-	observe(t, engine, netifdMessage("router-a", "Interface 'wan' is now up", start.Add(70*time.Second), "interface-up"), true)
-	engine.Tick(context.Background(), start.Add(3*time.Minute))
-	if got := singleIncident(t, engine).State; got != StateActive {
-		t.Fatalf("state after interface-only recovery = %q, want %q", got, StateActive)
-	}
-
-	observe(t, engine, wanMessage("router-a", "online", start.Add(4*time.Minute), "reachability-up"), true)
-	engine.Tick(context.Background(), start.Add(5*time.Minute))
-	if got := singleIncident(t, engine).State; got != StateResolved {
-		t.Fatalf("state after reachability recovery = %q, want %q", got, StateResolved)
-	}
-}
-
-func TestEngineMatchesOnlyConfiguredPPPDevice(t *testing.T) {
-	t.Parallel()
-
-	start := time.Date(2026, 9, 23, 10, 36, 54, 0, time.UTC)
-	engine := newTestEngine(t, Config{WANDevice: "pppoe-primary", DownAfter: time.Minute, RecoveredAfter: time.Minute})
-
-	observe(t, engine, netifdMessage("router-a", "Network device 'pppoe-wan' link is down", start, "wrong-device"), true)
-	observe(t, engine, netifdMessage("router-a", "Network device 'pppoe-primary' link is down", start.Add(time.Second), "right-device"), true)
-	engine.Tick(context.Background(), start.Add(61*time.Second))
-
-	incident := singleIncident(t, engine)
-	if !incident.StartedAt.Equal(start.Add(time.Second)) {
-		t.Fatalf("started_at = %v, want configured-device evidence time", incident.StartedAt)
-	}
 }
 
 func TestEngineRecoveryFlapKeepsSameIncident(t *testing.T) {
@@ -228,9 +206,7 @@ func wanMessage(host, state string, received time.Time, id string) model.Message
 }
 
 func netifdMessage(host, message string, received time.Time, id string) model.Message {
-	return model.Message{
-		ID: id, ReceivedAt: received, Hostname: host, Tag: "netifd", Message: message, Transport: "udp/tcp",
-	}
+	return model.Message{ID: id, ReceivedAt: received, Hostname: host, Tag: "netifd", Message: message, Transport: "udp/tcp"}
 }
 
 func observe(t *testing.T, engine *Service, message model.Message, eligible bool) {

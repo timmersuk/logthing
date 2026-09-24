@@ -17,7 +17,7 @@ func TestIncidentDefaults(t *testing.T) {
 	if cfg.WANDownAfter != time.Minute || cfg.WANRecoveredAfter != time.Minute {
 		t.Fatalf("durations = %v/%v", cfg.WANDownAfter, cfg.WANRecoveredAfter)
 	}
-	if cfg.StateDir != filepath.Join("custom", "state") || cfg.WANInterface != "wan" || cfg.WANDevice != "pppoe-wan" || cfg.Notifier != "none" {
+	if cfg.StateDir != filepath.Join("custom", "state") || cfg.WANInterface != "wan" || cfg.Notifier != "none" {
 		t.Fatalf("incident defaults = %#v", cfg)
 	}
 }

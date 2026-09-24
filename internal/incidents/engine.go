@@ -33,7 +33,6 @@ const (
 
 type Config struct {
 	Interface      string
-	WANDevice      string
 	DownAfter      time.Duration
 	RecoveredAfter time.Duration
 }
@@ -141,9 +140,6 @@ type Service struct {
 func New(cfg Config, persistence Persistence) (*Service, error) {
 	if cfg.Interface == "" {
 		cfg.Interface = "wan"
-	}
-	if cfg.WANDevice == "" {
-		cfg.WANDevice = "pppoe-wan"
 	}
 	if cfg.DownAfter <= 0 {
 		return nil, errors.New("down duration must be positive")
@@ -261,7 +257,7 @@ func (s *Service) LastCheckpointAt() time.Time {
 }
 
 func (s *Service) observeLocked(message model.Message, notifyEligible bool, sourceRef string) {
-	evidence, ok := classify(message, s.cfg.Interface, s.cfg.WANDevice)
+	evidence, ok := classify(message, s.cfg.Interface)
 	if !ok {
 		return
 	}
@@ -574,7 +570,7 @@ type evidence struct {
 	reachability bool
 }
 
-func classify(message model.Message, iface, wanDevice string) (evidence, bool) {
+func classify(message model.Message, iface string) (evidence, bool) {
 	hostname := strings.TrimSpace(message.Hostname)
 	if hostname == "" || message.ReceivedAt.IsZero() {
 		return evidence{}, false
@@ -582,8 +578,7 @@ func classify(message model.Message, iface, wanDevice string) (evidence, bool) {
 	if message.Tag == "netifd" {
 		status := strings.TrimSpace(message.Message)
 		down := status == "Interface '"+iface+"' has lost the connection" ||
-			status == "Interface '"+iface+"' is now down" ||
-			status == "Network device '"+wanDevice+"' link is down"
+			status == "Interface '"+iface+"' is now down"
 		up := status == "Interface '"+iface+"' is now up"
 		if !down && !up {
 			return evidence{}, false
