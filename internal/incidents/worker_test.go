@@ -51,6 +51,31 @@ func TestWorkerStopsRetryingPermanentNotificationFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerRejectsUnknownNotificationKind(t *testing.T) {
+	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	engine := activeEngineWithJob(t, nil, start)
+	state := engine.Snapshot()
+	for id, job := range state.Jobs {
+		job.Kind = notification.Kind("unknown")
+		state.Jobs[id] = job
+	}
+	if err := engine.ReplaceSnapshot(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingNotifier{}
+	worker := NewWorker(engine, nil, notifier, start)
+	if err := worker.dispatch(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if messages := notifier.snapshot(); len(messages) != 0 {
+		t.Fatalf("notifications = %#v, want none", messages)
+	}
+	deliveries := engine.NotificationsFor(singleIncident(t, engine).ID)
+	if len(deliveries) != 1 || !deliveries[0].Permanent || deliveries[0].LastError == "" {
+		t.Fatalf("deliveries = %#v, want permanent unsupported-kind failure", deliveries)
+	}
+}
+
 func TestWorkerKeepsJobRetryableWhenDeliveryReceiptPersistenceFails(t *testing.T) {
 	start := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	persistence := &togglePersistence{}
@@ -111,6 +136,63 @@ func TestWorkerReconcilesStoredEvidenceAndDeliversLifecycle(t *testing.T) {
 	}
 	if got := notifier.kinds(); len(got) != 2 || got[1] != notification.KindIncidentResolved {
 		t.Fatalf("notification kinds = %#v, want opened, resolved", got)
+	}
+}
+
+func TestWorkerDeliversBackupWarningAndRestoration(t *testing.T) {
+	start := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	engine := newTestEngine(t, Config{DownAfter: time.Minute, RecoveredAfter: time.Minute})
+	notifier := &recordingNotifier{}
+	worker := NewWorker(engine, nil, notifier, start)
+
+	observe(t, engine, repeaterMessage("router-a", "wwan", "offline", start, "down"), true)
+	if err := engine.Tick(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.dispatch(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	observe(t, engine, repeaterMessage("router-a", "wwan", "online", start.Add(70*time.Second), "up"), true)
+	if err := engine.Tick(context.Background(), start.Add(130*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.dispatch(context.Background(), start.Add(130*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := notifier.snapshot()
+	if len(messages) != 2 {
+		t.Fatalf("notifications = %#v, want backup warning and restoration", messages)
+	}
+	if messages[0].Kind != notification.KindFallbackOpened || messages[0].Severity != "warning" || messages[0].Title != "🟠 Starlink backup down" {
+		t.Fatalf("opening notification = %#v", messages[0])
+	}
+	if messages[1].Kind != notification.KindFallbackResolved || messages[1].Severity != "info" || messages[1].Title != "🟢 Starlink backup recovered" {
+		t.Fatalf("recovery notification = %#v", messages[1])
+	}
+}
+
+func TestWorkerDeliversCombinedRiskEscalation(t *testing.T) {
+	start := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	engine := newTestEngine(t, Config{DownAfter: time.Minute, RecoveredAfter: time.Minute})
+	notifier := &recordingNotifier{}
+	worker := NewWorker(engine, nil, notifier, start)
+
+	observe(t, engine, wanMessage("router-a", "offline", start, "wan-down"), true)
+	engine.Tick(context.Background(), start.Add(time.Minute))
+	observe(t, engine, netifdMessage("router-a", "Interface 'tethering' is now down", start.Add(70*time.Second), "4g-down"), true)
+	engine.Tick(context.Background(), start.Add(130*time.Second))
+	if err := worker.dispatch(context.Background(), start.Add(130*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := notifier.snapshot()
+	if len(messages) != 2 {
+		t.Fatalf("notifications = %#v, want primary opening and fallback escalation", messages)
+	}
+	if messages[1].Kind != notification.KindFallbackEscalated || messages[1].Severity != "critical" || messages[1].Title != "🔴 Primary WAN and 4G tethering backup down" {
+		t.Fatalf("escalation notification = %#v", messages[1])
 	}
 }
 
@@ -356,4 +438,10 @@ func (n *recordingNotifier) kinds() []notification.Kind {
 		kinds[index] = message.Kind
 	}
 	return kinds
+}
+
+func (n *recordingNotifier) snapshot() []notification.Notification {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]notification.Notification(nil), n.messages...)
 }

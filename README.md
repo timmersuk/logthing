@@ -39,8 +39,10 @@ later Parquet compaction or replacement store a contained change.
 | `LOGTHING_PUBLIC_URL` | empty | Optional public base URL for notification links. |
 
 Incident processing always runs for every named host. It recognizes exact
-`gl-repeater` messages for `interface wan status offline` and `online`; a Wi-Fi
-or 4G fallback does not resolve a primary-WAN incident. Notification delivery is
+`gl-repeater` and `netifd` state changes for primary WAN, Starlink and 4G
+tethering interfaces. Primary and fallback incidents are debounced separately;
+a fallback failure warns even while primary WAN is healthy and escalates when
+both are down. Notification delivery is
 at least once, so a process crash immediately after Discord accepts a webhook
 can produce a duplicate message.
 
@@ -139,7 +141,7 @@ Authenticated:
 | `GET` | `/api/v1/messages/stream` | none | Streams newly appended messages as Server-Sent Events. |
 | `POST` | `/api/v1/messages/import` | none | Imports newline-delimited JSON messages into local storage. |
 | `POST` | `/api/v1/test-event` | none | Sends one server-side RFC5424 test event to the configured syslog destination. |
-| `GET` | `/api/v1/incidents` | `state`, `limit`, `offset` | Lists active and resolved primary-WAN incidents. |
+| `GET` | `/api/v1/incidents` | `state`, `limit`, `offset` | Lists active and resolved connectivity incidents. |
 | `GET` | `/api/v1/incidents/{id}` | none | Returns one incident and its notification deliveries. |
 | `GET` | `/api/v1/incidents/health` | none | Returns incident-worker health and delivery backlog. |
 | `POST` | `/api/v1/notifications/test` | none | Sends a test through the configured notification adapter. |
@@ -223,7 +225,7 @@ rows as NDJSON. The `Send test event` button calls `/api/v1/test-event`, which
 asks the server to send one syslog message to `LOGTHING_TEST_EVENT_TARGET`.
 
 The summary on `/` polls derived incident state every 15 seconds and shows
-whether any primary-WAN incident is current. The `/incidents` page separates
+whether any connectivity incident is current. The `/incidents` page separates
 current incidents from resolved history and labels the detection, confirmation,
 recovery, duration, notification, and evidence columns. It also shows the full
 worker error when analysis fails. Its test-notification button exercises the

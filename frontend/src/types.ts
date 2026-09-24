@@ -35,7 +35,7 @@ export interface ImportMessagesResponse {
 
 export interface NotificationDelivery {
   id: string;
-  kind: "incident_opened" | "incident_resolved";
+  kind: "incident_opened" | "incident_resolved" | "fallback_opened" | "fallback_resolved" | "fallback_escalated";
   attempts: number;
   last_error?: string;
   sent_at?: string;

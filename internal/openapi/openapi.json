@@ -396,7 +396,7 @@
     "/api/v1/incidents": {
       "get": {
         "tags": ["incidents"],
-        "summary": "List primary-WAN incidents",
+        "summary": "List connectivity incidents",
         "security": [{"basicAuth": []}],
         "parameters": [
           {"name": "state", "in": "query", "schema": {"type": "string", "enum": ["pending_failure", "active", "resolved"]}},
@@ -409,7 +409,7 @@
     "/api/v1/incidents/{id}": {
       "get": {
         "tags": ["incidents"],
-        "summary": "Get a primary-WAN incident",
+        "summary": "Get a connectivity incident",
         "security": [{"basicAuth": []}],
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {"200": {"description": "Incident", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Incident"}}}}, "404": {"description": "Incident not found"}}

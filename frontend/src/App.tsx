@@ -495,8 +495,8 @@ export default function App() {
           <div className="page-heading">
             <div>
               <button className="back-link" type="button" onClick={() => navigate("/")}><ArrowLeft size={16} /> Messages</button>
-              <h2><CircleAlert size={21} /> Primary WAN incidents</h2>
-              <p>Outages detected from logical WAN status reported by GL.iNet routers. Backup availability is unknown.</p>
+              <h2><CircleAlert size={21} /> Connectivity incidents</h2>
+              <p>Primary WAN outages and monitored Starlink or 4G backup failures reported by GL.iNet routers.</p>
             </div>
             <button className="command-button secondary-command" type="button" disabled={sendingNotification} onClick={() => void handleTestNotification()}>
               <Bell size={16} className={sendingNotification ? "spin" : ""} /> Test notification
@@ -526,7 +526,7 @@ export default function App() {
             {currentIncidents.length > 0 ? (
               <IncidentTable incidents={currentIncidents} onEvidence={(id) => { setFilterInput(id); setPage(0); navigate("/"); }} />
             ) : (
-              <div className="active-clear">No current primary WAN incidents</div>
+              <div className="active-clear">No current connectivity incidents</div>
             )}
           </section>
 
@@ -734,10 +734,10 @@ export default function App() {
       {error && <div className="error-banner">{error}</div>}
       {notice && <div className="notice-banner">{notice}</div>}
 
-      <section className="incident-summary" aria-label="Current primary WAN incidents">
+      <section className="incident-summary" aria-label="Current connectivity incidents">
         <div className="incident-summary-heading">
           <div>
-            <strong>{incidentLoadError ? "Primary WAN status unavailable" : currentIncidents.length > 0 ? `${currentIncidents.length} current primary WAN incident${currentIncidents.length === 1 ? "" : "s"}` : "Primary WAN is healthy"}</strong>
+            <strong>{incidentLoadError ? "Connectivity status unavailable" : currentIncidents.length > 0 ? `${currentIncidents.length} current connectivity incident${currentIncidents.length === 1 ? "" : "s"}` : "Primary WAN and monitored backups are healthy"}</strong>
             <span>{incidentLoadError ? "Open the incidents page for the error details." : currentIncidents.length > 0 ? "Current outage status from the incident analyser." : "No outage is active or being confirmed."}</span>
           </div>
           <button className="text-button" type="button" onClick={() => navigate("/incidents")}>View incidents</button>
