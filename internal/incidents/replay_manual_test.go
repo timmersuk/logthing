@@ -28,11 +28,16 @@ func TestManualHistoricalReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	incidents := engine.List(Query{})
+	counts := make(map[string]int)
 	for _, incident := range incidents {
+		counts[incident.Interface]++
 		if incident.Notify {
 			t.Fatalf("historical incident %s was notification eligible", incident.ID)
 		}
-		t.Logf("%s %s %v", incident.State, incident.StartedAt, incident.ResolvedAt)
+		t.Logf("%s %s %s %v", incident.Interface, incident.State, incident.StartedAt, incident.ResolvedAt)
 	}
-	t.Logf("historical sustained incidents: %d", len(incidents))
+	t.Logf("historical sustained incidents: %d (%v)", len(incidents), counts)
+	if counts["wan"] != 17 {
+		t.Fatalf("primary WAN incidents = %d, want 17", counts["wan"])
+	}
 }

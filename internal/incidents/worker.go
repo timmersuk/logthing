@@ -200,7 +200,13 @@ func (w *Worker) dispatch(ctx context.Context, now time.Time) error {
 			}
 			continue
 		}
-		message := notificationFor(job, incident)
+		message, err := notificationFor(job, incident)
+		if err != nil {
+			if markErr := w.engine.MarkNotificationFailed(ctx, job.ID, err.Error(), now, true); markErr != nil {
+				return markErr
+			}
+			continue
+		}
 		if w.publicURL != "" {
 			message.Link = fmt.Sprintf("%s/?incident=%s", w.publicURL, incident.ID)
 		}
@@ -267,26 +273,55 @@ func (w *Worker) recordError(err error) {
 	log.Printf("incident worker: %v", err)
 }
 
-func notificationFor(job NotificationJob, incident Incident) notification.Notification {
+func notificationFor(job NotificationJob, incident Incident) (notification.Notification, error) {
 	message := notification.Notification{
 		EventID:    job.ID,
 		OccurredAt: job.CreatedAt,
 		IncidentID: incident.ID,
 	}
 	switch job.Kind {
+	case NotificationFallbackResolved:
+		message.Kind = notification.KindFallbackResolved
+		message.Severity = "info"
+		message.Title = "🟢 " + fallbackName(incident.Interface) + " backup recovered"
+		duration := job.CreatedAt.Sub(incident.StartedAt).Round(time.Second)
+		message.Body = fmt.Sprintf("%s %s was healthy continuously for %s. Incident duration: %s.", incident.Hostname, incident.Interface, incident.RecoveredAfter, duration)
+	case NotificationFallbackEscalated:
+		message.Kind = notification.KindFallbackEscalated
+		message.Severity = "critical"
+		message.Title = "🔴 Primary WAN and " + fallbackName(incident.Interface) + " backup down"
+		message.Body = fmt.Sprintf("%s %s has also been offline for %s. Remaining connectivity is unknown.", incident.Hostname, incident.Interface, incident.DownAfter)
+	case NotificationFallbackOpened:
+		message.Kind = notification.KindFallbackOpened
+		message.Severity = "warning"
+		message.Title = "🟠 " + fallbackName(incident.Interface) + " backup down"
+		message.Body = fmt.Sprintf("%s %s has been offline for %s; primary WAN remains healthy.", incident.Hostname, incident.Interface, incident.DownAfter)
 	case NotificationResolved:
 		message.Kind = notification.KindIncidentResolved
 		message.Severity = "info"
 		message.Title = "🟢 Primary WAN recovered"
 		duration := job.CreatedAt.Sub(incident.StartedAt).Round(time.Second)
 		message.Body = fmt.Sprintf("%s %s was healthy continuously for %s. Incident duration: %s.", incident.Hostname, incident.Interface, incident.RecoveredAfter, duration)
-	default:
+	case NotificationOpened:
 		message.Kind = notification.KindIncidentOpened
 		message.Severity = "critical"
 		message.Title = "🔴 Primary WAN down"
 		message.Body = fmt.Sprintf("%s %s has been offline for %s. Backup connectivity is unknown.", incident.Hostname, incident.Interface, incident.DownAfter)
+	default:
+		return notification.Notification{}, fmt.Errorf("unsupported notification kind %q", job.Kind)
 	}
-	return message
+	return message, nil
+}
+
+func fallbackName(iface string) string {
+	switch iface {
+	case "wwan":
+		return "Starlink"
+	case "tethering":
+		return "4G tethering"
+	default:
+		return iface
+	}
 }
 
 func retryDelay(jobID string, attempt int) time.Duration {

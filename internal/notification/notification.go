@@ -9,9 +9,12 @@ import (
 type Kind string
 
 const (
-	KindIncidentOpened   Kind = "incident_opened"
-	KindIncidentResolved Kind = "incident_resolved"
-	KindTest             Kind = "test"
+	KindIncidentOpened    Kind = "incident_opened"
+	KindIncidentResolved  Kind = "incident_resolved"
+	KindFallbackOpened    Kind = "fallback_opened"
+	KindFallbackResolved  Kind = "fallback_resolved"
+	KindFallbackEscalated Kind = "fallback_escalated"
+	KindTest              Kind = "test"
 )
 
 type Notification struct {

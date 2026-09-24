@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/timmersuk/logthing/internal/model"
+	"github.com/timmersuk/logthing/internal/notification"
 	"github.com/timmersuk/logthing/internal/storage"
 )
 
@@ -24,11 +25,14 @@ const (
 	StateResolved        State = "resolved"
 )
 
-type NotificationKind string
+type NotificationKind = notification.Kind
 
 const (
-	NotificationOpened   NotificationKind = "incident_opened"
-	NotificationResolved NotificationKind = "incident_resolved"
+	NotificationOpened            = notification.KindIncidentOpened
+	NotificationResolved          = notification.KindIncidentResolved
+	NotificationFallbackOpened    = notification.KindFallbackOpened
+	NotificationFallbackResolved  = notification.KindFallbackResolved
+	NotificationFallbackEscalated = notification.KindFallbackEscalated
 )
 
 type Config struct {
@@ -174,7 +178,7 @@ func (s *Service) Load(ctx context.Context) error {
 	initializeSnapshot(&state)
 	for key, current := range state.Trackers {
 		incident, exists := state.Incidents[current.IncidentID]
-		if exists && incident.RuleVersion == 1 && current.Phase != phaseHealthy {
+		if exists && incident.RuleVersion < 3 && current.Phase != phaseHealthy {
 			current.ReachabilityDown = true
 			state.Trackers[key] = current
 		}
@@ -236,9 +240,31 @@ func (s *Service) Rebuild(ctx context.Context, observations []Observation, curso
 		if !incident.Notify || incident.ActivatedAt == nil {
 			continue
 		}
-		s.enqueueLocked(incident.ID, NotificationOpened, *incident.ActivatedAt)
+		opened := NotificationOpened
+		resolved := NotificationResolved
+		if incident.Interface != s.cfg.Interface {
+			opened = NotificationFallbackOpened
+			resolved = NotificationFallbackResolved
+			if primary, down := s.primaryDownAtLocked(incident.Hostname, *incident.ActivatedAt); down {
+				s.enqueueFallbackEscalationLocked(incident.ID, primary.ID, *incident.ActivatedAt)
+				opened = ""
+			}
+		}
+		if opened != "" {
+			s.enqueueLocked(incident.ID, opened, *incident.ActivatedAt)
+		}
 		if incident.State == StateResolved && incident.ResolvedAt != nil {
-			s.enqueueLocked(incident.ID, NotificationResolved, *incident.ResolvedAt)
+			s.enqueueLocked(incident.ID, resolved, *incident.ResolvedAt)
+		}
+		if incident.Interface != s.cfg.Interface {
+			for _, primary := range s.state.Incidents {
+				if primary.Hostname != incident.Hostname || primary.Interface != s.cfg.Interface || primary.ActivatedAt == nil || !primary.ActivatedAt.After(*incident.ActivatedAt) {
+					continue
+				}
+				if incident.ResolvedAt == nil || primary.ActivatedAt.Before(*incident.ResolvedAt) {
+					s.enqueueFallbackEscalationLocked(incident.ID, primary.ID, *primary.ActivatedAt)
+				}
+			}
 		}
 	}
 	return s.saveLocked(ctx)
@@ -267,9 +293,17 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 	if !current.LastEvidenceAt.IsZero() && evidence.at.Before(current.LastEvidenceAt) {
 		return
 	}
+	if evidence.observeOnly {
+		if current.Phase == "" {
+			current.Phase = phaseHealthy
+		}
+		current.LastEvidenceAt = evidence.at
+		s.state.Trackers[key] = current
+		return
+	}
 	s.advanceLocked(evidence.at)
 	current = s.state.Trackers[key]
-	if evidence.online && current.ReachabilityDown && !evidence.reachability {
+	if evidence.online && evidence.iface == s.cfg.Interface && current.ReachabilityDown && !evidence.reachability {
 		return
 	}
 	current.LastEvidenceAt = evidence.at
@@ -290,7 +324,7 @@ func (s *Service) observeLocked(message model.Message, notifyEligible bool, sour
 				ReachabilityDown: evidence.reachability,
 			}
 			s.state.Incidents[id] = Incident{
-				ID: id, RuleVersion: 2, Hostname: evidence.hostname, Interface: evidence.iface,
+				ID: id, RuleVersion: 3, Hostname: evidence.hostname, Interface: evidence.iface,
 				State: StatePendingFailure, StartedAt: evidence.at, LastEvidenceAt: evidence.at,
 				EvidenceIDs: appendEvidence(nil, evidence.messageID), EvidenceRefs: appendEvidence(nil, evidence.sourceRef),
 				DownAfter: s.cfg.DownAfter, RecoveredAfter: s.cfg.RecoveredAfter, Notify: notifyEligible,
@@ -369,14 +403,17 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error {
 
 func (s *Service) advanceLocked(now time.Time) bool {
 	changed := false
-	for key, current := range s.state.Trackers {
+	for {
+		key, current, found := s.nextDueTrackerLocked(now)
+		if !found {
+			break
+		}
 		switch current.Phase {
 		case phasePendingFailure:
 			incident, exists := s.state.Incidents[current.IncidentID]
 			if !exists {
-				continue
-			}
-			if now.Sub(current.PendingSince) < incident.DownAfter {
+				delete(s.state.Trackers, key)
+				changed = true
 				continue
 			}
 			activated := current.PendingSince.Add(incident.DownAfter)
@@ -387,15 +424,28 @@ func (s *Service) advanceLocked(now time.Time) bool {
 			current.Phase = phaseActive
 			s.state.Trackers[key] = current
 			if incident.Notify {
-				s.enqueueLocked(incident.ID, NotificationOpened, activated)
+				kind := NotificationOpened
+				if incident.Interface != s.cfg.Interface {
+					if primary, down := s.primaryDownAtLocked(incident.Hostname, activated); down {
+						s.enqueueFallbackEscalationLocked(incident.ID, primary.ID, activated)
+						kind = ""
+					} else {
+						kind = NotificationFallbackOpened
+					}
+				}
+				if kind != "" {
+					s.enqueueLocked(incident.ID, kind, activated)
+				}
+			}
+			if incident.Interface == s.cfg.Interface {
+				s.escalateFallbacksLocked(incident.Hostname, incident.ID, activated)
 			}
 			changed = true
 		case phasePendingRecovery:
 			incident, exists := s.state.Incidents[current.IncidentID]
 			if !exists {
-				continue
-			}
-			if now.Sub(current.RecoverySince) < incident.RecoveredAfter {
+				delete(s.state.Trackers, key)
+				changed = true
 				continue
 			}
 			resolved := current.RecoverySince.Add(incident.RecoveredAfter)
@@ -403,13 +453,92 @@ func (s *Service) advanceLocked(now time.Time) bool {
 			incident.ResolvedAt = &resolved
 			s.state.Incidents[incident.ID] = incident
 			if incident.Notify {
-				s.enqueueLocked(incident.ID, NotificationResolved, resolved)
+				kind := NotificationResolved
+				if incident.Interface != s.cfg.Interface {
+					kind = NotificationFallbackResolved
+				}
+				s.enqueueLocked(incident.ID, kind, resolved)
 			}
 			s.state.Trackers[key] = tracker{Phase: phaseHealthy, LastEvidenceAt: current.LastEvidenceAt}
 			changed = true
 		}
 	}
 	return changed
+}
+
+func (s *Service) nextDueTrackerLocked(now time.Time) (string, tracker, bool) {
+	var selectedKey string
+	var selected tracker
+	var selectedAt time.Time
+	selectedPriority := 0
+	found := false
+	for key, current := range s.state.Trackers {
+		var dueAt time.Time
+		switch current.Phase {
+		case phasePendingFailure:
+		case phasePendingRecovery:
+		default:
+			continue
+		}
+		incident, exists := s.state.Incidents[current.IncidentID]
+		if !exists {
+			return key, current, true
+		}
+		if current.Phase == phasePendingFailure {
+			dueAt = current.PendingSince.Add(incident.DownAfter)
+		} else {
+			dueAt = current.RecoverySince.Add(incident.RecoveredAfter)
+		}
+		if dueAt.After(now) {
+			continue
+		}
+		priority := 0
+		if current.Phase == phasePendingFailure {
+			priority = 2
+			if incident.Interface == s.cfg.Interface {
+				priority = 1
+			}
+		}
+		if !found || dueAt.Before(selectedAt) || (dueAt.Equal(selectedAt) && priority < selectedPriority) {
+			selectedKey, selected, selectedAt, found = key, current, dueAt, true
+			selectedPriority = priority
+		}
+	}
+	return selectedKey, selected, found
+}
+
+func (s *Service) primaryDownAtLocked(hostname string, at time.Time) (Incident, bool) {
+	for _, incident := range s.state.Incidents {
+		if incident.Hostname != hostname || incident.Interface != s.cfg.Interface || incident.ActivatedAt == nil || at.Before(*incident.ActivatedAt) {
+			continue
+		}
+		if incident.ResolvedAt == nil || at.Before(*incident.ResolvedAt) {
+			return incident, true
+		}
+	}
+	return Incident{}, false
+}
+
+func (s *Service) escalateFallbacksLocked(hostname, primaryIncidentID string, at time.Time) {
+	for _, incident := range s.state.Incidents {
+		if incident.Hostname != hostname || incident.Interface == s.cfg.Interface || !incident.Notify {
+			continue
+		}
+		if incident.State == StateActive || incident.State == StatePendingRecovery {
+			s.enqueueFallbackEscalationLocked(incident.ID, primaryIncidentID, at)
+		}
+	}
+}
+
+func (s *Service) enqueueFallbackEscalationLocked(fallbackIncidentID, primaryIncidentID string, at time.Time) {
+	id := fallbackIncidentID + ":" + string(NotificationFallbackEscalated) + ":" + primaryIncidentID
+	if _, exists := s.state.Jobs[id]; exists {
+		return
+	}
+	s.state.Jobs[id] = NotificationJob{
+		ID: id, IncidentID: fallbackIncidentID, Kind: NotificationFallbackEscalated,
+		CreatedAt: at, NextAt: at,
+	}
 }
 
 func (s *Service) enqueueLocked(incidentID string, kind NotificationKind, at time.Time) {
@@ -568,6 +697,7 @@ type evidence struct {
 	messageID    string
 	sourceRef    string
 	reachability bool
+	observeOnly  bool
 }
 
 func classify(message model.Message, iface string) (evidence, bool) {
@@ -577,35 +707,39 @@ func classify(message model.Message, iface string) (evidence, bool) {
 	}
 	if message.Tag == "netifd" {
 		status := strings.TrimSpace(message.Message)
-		down := status == "Interface '"+iface+"' has lost the connection" ||
-			status == "Interface '"+iface+"' is now down"
-		up := status == "Interface '"+iface+"' is now up"
-		if !down && !up {
-			return evidence{}, false
+		for _, candidate := range []string{iface, "wwan", "tethering"} {
+			down := status == "Interface '"+candidate+"' is now down" ||
+				(candidate == iface && status == "Interface '"+candidate+"' has lost the connection")
+			up := status == "Interface '"+candidate+"' is now up"
+			if down || up {
+				return evidence{hostname: hostname, iface: candidate, online: up, at: message.ReceivedAt.UTC(), messageID: message.ID}, true
+			}
 		}
-		return evidence{hostname: hostname, iface: iface, online: up, at: message.ReceivedAt.UTC(), messageID: message.ID}, true
+		return evidence{}, false
 	}
 	if message.Tag != "gl-repeater" {
 		return evidence{}, false
 	}
-	prefix := "interface " + iface + " status "
 	status := strings.TrimSpace(message.Message)
-	index := strings.Index(status, prefix)
-	if index < 0 || !validRepeaterPrefix(status[:index]) {
-		return evidence{}, false
+	if index := strings.Index(status, "switch to STARLINK"); index >= 0 && validRepeaterPrefix(status[:index]) && strings.TrimSpace(status[index:]) == "switch to STARLINK" {
+		return evidence{hostname: hostname, iface: "wwan", at: message.ReceivedAt.UTC(), messageID: message.ID, observeOnly: true}, true
 	}
-	state := strings.TrimSpace(status[index+len(prefix):])
-	if state != "offline" && state != "online" {
-		return evidence{}, false
+	for _, candidate := range []string{iface, "wwan"} {
+		prefix := "interface " + candidate + " status "
+		index := strings.Index(status, prefix)
+		if index < 0 || !validRepeaterPrefix(status[:index]) {
+			continue
+		}
+		state := strings.TrimSpace(status[index+len(prefix):])
+		if state != "offline" && state != "online" {
+			continue
+		}
+		return evidence{
+			hostname: hostname, iface: candidate, online: state == "online",
+			at: message.ReceivedAt.UTC(), messageID: message.ID, reachability: true,
+		}, true
 	}
-	return evidence{
-		hostname:     hostname,
-		iface:        iface,
-		online:       state == "online",
-		at:           message.ReceivedAt.UTC(),
-		messageID:    message.ID,
-		reachability: true,
-	}, true
+	return evidence{}, false
 }
 
 func validRepeaterPrefix(value string) bool {
